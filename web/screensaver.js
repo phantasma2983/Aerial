@@ -10,6 +10,7 @@ let previousErrorId = "";
 let numErrors = 1;
 let screenNumber = null;
 let randomType, randomDirection;
+let nextVideoTimeout;
 
 function quitApp() {
     electron.ipcRenderer.send('quitApp');
@@ -107,7 +108,9 @@ function playVideo(videoContainer, loadedCallback) {
     }
 
     currentlyPlaying = containers[videoContainer].videoId;
-    containers[videoContainer].play();
+    containers[videoContainer].play().catch((error) => {
+        console.warn("Video play was interrupted", error);
+    });
     containers[videoContainer].playbackRate = Number(electron.store.get('playbackSpeed'));
 
     if (loadedCallback) {
@@ -120,28 +123,43 @@ let videoWaitingTimeout;
 function newVideo() {
     prepVideo(prePlayer, () => {
         clearTimeout(videoWaitingTimeout);
-        //give time for the video to load before tying to play it
-        videoWaitingTimeout = setTimeout(() => {
+        const onCanPlay = () => {
             playVideo(prePlayer, () => {
-                clearTimeout(transitionTimeout);
-                fadeVideoIn(transitionLength);
-                //wait until the video is fully loaded before setting the end of video timeout
-                setTimeout(() => {
-                    //call a new video when the current one is over
-                    setTimeout(() => {
-                        newVideo();
-                        numErrors = 0;
-                    }, (containers[prePlayer].duration * 1000) - transitionLength - 500);
-                }, 1000);
+                runTransitionIn(transitionLength);
+                scheduleNextVideo();
             });
-        }, 500);
+        };
+
+        if (containers[prePlayer].readyState >= 3) {
+            onCanPlay();
+            return;
+        }
+
+        containers[prePlayer].addEventListener('canplay', onCanPlay, {once: true});
+        //fail-safe in case a driver never reports canplay
+        videoWaitingTimeout = setTimeout(onCanPlay, 1500);
     });
+}
+
+function scheduleNextVideo() {
+    clearTimeout(nextVideoTimeout);
+    const durationMs = containers[prePlayer].duration * 1000;
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        return;
+    }
+    nextVideoTimeout = setTimeout(() => {
+        newVideo();
+        numErrors = 0;
+    }, Math.max(1000, durationMs - transitionLength - 500));
 }
 
 function switchVideoContainers() {
     if (videoQuality) {
         containers[currentPlayer].style.display = 'none';
         containers[prePlayer].style.display = '';
+    } else if (useModernTransitions) {
+        containers[currentPlayer].style.opacity = '0';
+        containers[prePlayer].style.opacity = '1';
     }
     containers[currentPlayer].pause();
     let temp = currentPlayer;
@@ -200,6 +218,38 @@ function drawDynamicText() {
 let transitionLength = electron.store.get('videoTransitionLength');
 let transitionPercent = 1;
 let transitionSource = "";
+const useModernTransitions = !electron.store.get("videoQuality") && (electron.store.get("modernTransitions") ?? true);
+
+function runTransitionIn(time) {
+    if (useModernTransitions) {
+        transitionVideosModern(time);
+        return;
+    }
+    clearTimeout(transitionTimeout);
+    fadeVideoIn(time);
+}
+
+function transitionVideosModern(time) {
+    drawDynamicText();
+    const fromVideo = containers[currentPlayer];
+    const toVideo = containers[prePlayer];
+
+    fromVideo.style.transition = `opacity ${time}ms linear`;
+    toVideo.style.transition = `opacity ${time}ms linear`;
+    toVideo.style.display = '';
+    toVideo.style.opacity = '0';
+
+    requestAnimationFrame(() => {
+        fromVideo.style.opacity = '0';
+        toVideo.style.opacity = '1';
+    });
+
+    setTimeout(() => {
+        switchVideoContainers();
+        fromVideo.style.transition = '';
+        toVideo.style.transition = '';
+    }, time);
+}
 
 function fadeVideoOut(time) {
     transitionSource = "fadeout";
@@ -494,6 +544,11 @@ for (let i = 0; i < videoFilters.length; i++) {
     }
 }
 ctx1.filter = filterString;
+containers.forEach((container, index) => {
+    container.style.filter = filterString;
+    container.style.display = '';
+    container.style.opacity = index === currentPlayer ? '1' : '0';
+});
 
 // Fix for issue #110
 // Replace requestAnimationFrame with our own that never sleeps
@@ -523,15 +578,19 @@ if (useAlternateRenderMethod) {
         return drawVideoRequests.length - 1;
     }
 
-    if (videoQuality) {
+    if (videoQuality || useModernTransitions) {
         $('#video').css('display', '');
+        $('#video2').css('display', '');
+        $('#canvasVideo').hide();
     } else {
         getAnimationFrame(performance.now());
         drawVideo();
     }
 } else {
-    if (videoQuality) {
+    if (videoQuality || useModernTransitions) {
         $('#video').css('display', '');
+        $('#video2').css('display', '');
+        $('#canvasVideo').hide();
     } else {
         drawVideo();
     }
@@ -708,8 +767,8 @@ electron.ipcRenderer.on('blankTheScreen', () => {
     fadeVideoOut(transitionLength);
     fadeTextOut(transitionLength)
     setTimeout(() => {
-        video.src = "";
-        video2.src = "";
+        containers[0].src = "";
+        containers[1].src = "";
     }, transitionLength + 750);
 });
 

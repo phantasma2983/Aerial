@@ -16,7 +16,6 @@ const {exec} = require('child_process');
 const videos = require("./videos.json");
 const Store = require('electron-store');
 const store = new Store();
-const request = require('request');
 const https = require('https');
 const fs = require('fs');
 const path = require("path");
@@ -506,6 +505,7 @@ function setUpConfigFile() {
     }
     store.set('randomSpeed', store.get('randomSpeed') ?? 30);
     store.set('videoQuality', store.get('videoQuality') ?? false);
+    store.set('modernTransitions', store.get('modernTransitions') ?? true);
     store.set('fps', store.get('fps') ?? 60);
 
     //config
@@ -517,22 +517,38 @@ function setUpConfigFile() {
 
 //check for update on GitHub
 function checkForUpdate() {
-    request('https://raw.githubusercontent.com/OrangeJedi/Aerial/master/package.json', function (error, response, body) {
-        if (error) {
-            console.log("Error checking for updates: ", error);
+    https.get('https://raw.githubusercontent.com/OrangeJedi/Aerial/master/package.json', (response) => {
+        if (response.statusCode !== 200) {
+            console.log(`Error checking for updates: HTTP ${response.statusCode}`);
+            response.resume();
             return;
         }
-        store.set('updateAvailable', false);
-        const onlinePackage = JSON.parse(body);
-        if (onlinePackage.version && app.isPackaged) {
-            if (onlinePackage.version[0] > app.getVersion()[0] || onlinePackage.version[2] > app.getVersion()[2] || onlinePackage.version[4] > app.getVersion()[4]) {
-                store.set('updateAvailable', onlinePackage.version);
-                new Notification({
-                    title: "An update for Aerial is available",
-                    body: `Version ${onlinePackage.version} is available for download. Visit https://github.com/OrangeJedi/Aerial/releases to update Aerial.`
-                }).show()
+
+        let body = '';
+        response.setEncoding('utf8');
+        response.on('data', (chunk) => {
+            body += chunk;
+        });
+
+        response.on('end', () => {
+            store.set('updateAvailable', false);
+            try {
+                const onlinePackage = JSON.parse(body);
+                if (onlinePackage.version && app.isPackaged) {
+                    if (onlinePackage.version[0] > app.getVersion()[0] || onlinePackage.version[2] > app.getVersion()[2] || onlinePackage.version[4] > app.getVersion()[4]) {
+                        store.set('updateAvailable', onlinePackage.version);
+                        new Notification({
+                            title: "An update for Aerial is available",
+                            body: `Version ${onlinePackage.version} is available for download. Visit https://github.com/OrangeJedi/Aerial/releases to update Aerial.`
+                        }).show()
+                    }
+                }
+            } catch (error) {
+                console.log("Error parsing update response:", error);
             }
-        }
+        });
+    }).on('error', (error) => {
+        console.log("Error checking for updates: ", error);
     });
 }
 
