@@ -30,6 +30,7 @@ function displaySettings() {
     for (let i = 0; i < staticText.length; i++) {
         $(`#${staticText[i]}`).text(electron.store.get(staticText[i]));
     }
+    bindAboutLinks();
     displayPlaybackSettings();
     displayCustomVideos();
     colorTextPositionRadio();
@@ -44,6 +45,32 @@ function displaySettings() {
 }
 
 displaySettings();
+
+function bindAboutLinks() {
+    const repositoryUrl = electron.store.get("repositoryUrl");
+    const releasesUrl = electron.store.get("releasesUrl");
+    const wikiUrl = electron.store.get("wikiUrl");
+    const licenseUrl = electron.store.get("licenseUrl");
+    const upstreamRepositoryUrl = electron.store.get("upstreamRepositoryUrl");
+
+    const links = [
+        {id: "repoLink", href: repositoryUrl},
+        {id: "welcomeRepoLink", href: repositoryUrl},
+        {id: "releaseLink", href: releasesUrl},
+        {id: "wikiLink", href: wikiUrl},
+        {id: "licenseLink", href: licenseUrl},
+        {id: "upstreamRepoLink", href: upstreamRepositoryUrl}
+    ];
+
+    for (const link of links) {
+        if (link.href) {
+            const element = document.getElementById(link.id);
+            if (element) {
+                element.href = link.href;
+            }
+        }
+    }
+}
 
 function displayPlaybackSettings() {
     let settings = electron.store.get('videoFilters');

@@ -11,6 +11,18 @@ let numErrors = 1;
 let screenNumber = null;
 let randomType, randomDirection;
 let nextVideoTimeout;
+const debugPlayback = electron.store.get("debugPlayback") ?? false;
+
+function logPlayback(message, details) {
+    if (!debugPlayback) {
+        return;
+    }
+    let suffix = "";
+    if (details !== undefined) {
+        suffix = typeof details === "string" ? ` ${details}` : ` ${JSON.stringify(details)}`;
+    }
+    electron.ipcRenderer.send('consoleLog', `[playback][screen ${screenNumber ?? "?"}] ${message}${suffix}`);
+}
 
 function quitApp() {
     electron.ipcRenderer.send('quitApp');
@@ -121,21 +133,40 @@ function playVideo(videoContainer, loadedCallback) {
 let videoWaitingTimeout;
 
 function newVideo() {
-    prepVideo(prePlayer, () => {
+    const targetPlayer = prePlayer;
+    logPlayback("newVideo requested", {currentPlayer, prePlayer: targetPlayer});
+    prepVideo(targetPlayer, () => {
         clearTimeout(videoWaitingTimeout);
+        let started = false;
         const onCanPlay = () => {
-            playVideo(prePlayer, () => {
+            if (started || blackScreen) {
+                return;
+            }
+            started = true;
+            clearTimeout(videoWaitingTimeout);
+            if (prePlayer !== targetPlayer) {
+                logPlayback("stale onCanPlay ignored", {targetPlayer, currentPlayer, prePlayer});
+                return;
+            }
+            logPlayback("starting transition", {
+                targetPlayer,
+                currentPlayer,
+                prePlayer,
+                duration: containers[targetPlayer].duration,
+                readyState: containers[targetPlayer].readyState
+            });
+            playVideo(targetPlayer, () => {
                 runTransitionIn(transitionLength);
                 scheduleNextVideo();
             });
         };
 
-        if (containers[prePlayer].readyState >= 3) {
+        if (containers[targetPlayer].readyState >= 3) {
             onCanPlay();
             return;
         }
 
-        containers[prePlayer].addEventListener('canplay', onCanPlay, {once: true});
+        containers[targetPlayer].addEventListener('canplay', onCanPlay, {once: true});
         //fail-safe in case a driver never reports canplay
         videoWaitingTimeout = setTimeout(onCanPlay, 1500);
     });
@@ -145,8 +176,10 @@ function scheduleNextVideo() {
     clearTimeout(nextVideoTimeout);
     const durationMs = containers[prePlayer].duration * 1000;
     if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        logPlayback("scheduleNextVideo skipped", {duration: containers[prePlayer].duration, prePlayer});
         return;
     }
+    logPlayback("scheduleNextVideo", {inMs: Math.max(1000, durationMs - transitionLength - 500), durationMs, prePlayer});
     nextVideoTimeout = setTimeout(() => {
         newVideo();
         numErrors = 0;
@@ -154,6 +187,7 @@ function scheduleNextVideo() {
 }
 
 function switchVideoContainers() {
+    logPlayback("switchVideoContainers before", {currentPlayer, prePlayer});
     if (videoQuality) {
         containers[currentPlayer].style.display = 'none';
         containers[prePlayer].style.display = '';
@@ -166,6 +200,7 @@ function switchVideoContainers() {
     currentPlayer = prePlayer;
     transitionPercent = 1;
     prePlayer = temp;
+    logPlayback("switchVideoContainers after", {currentPlayer, prePlayer});
 }
 
 function drawDynamicText() {

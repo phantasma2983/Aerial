@@ -11,14 +11,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OrangeJedi/Aerial.git"
+    "url": "git+https://github.com/phantasma2983/Aerial.git"
   },
-  "author": "OrangeJedi",
+  "author": "phantasma2983 (fork of OrangeJedi/Aerial)",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/OrangeJedi/Aerial/issues"
+    "url": "https://github.com/phantasma2983/Aerial/issues"
   },
-  "homepage": "https://github.com/OrangeJedi/Aerial#readme",
+  "homepage": "https://github.com/phantasma2983/Aerial#readme",
   "devDependencies": {
     "electron": "^22.2.0",
     "electron-builder": "^24.0.0"

@@ -14,6 +14,7 @@ const {
 } = require('electron');
 const {exec} = require('child_process');
 const videos = require("./videos.json");
+const packageMetadata = require("./package.json");
 const Store = require('electron-store');
 const store = new Store();
 const https = require('https');
@@ -24,6 +25,48 @@ let autoLauncher = new AutoLaunch({
     name: 'Aerial',
 });
 const SunCalc = require('suncalc');
+
+const UPSTREAM_REPO_URL = "https://github.com/OrangeJedi/Aerial";
+
+function getGitHubRepoFromUrl(repositoryUrl) {
+    if (!repositoryUrl || typeof repositoryUrl !== "string") {
+        return null;
+    }
+    const normalized = repositoryUrl.replace(/^git\+/, "").replace(/\.git$/, "");
+    const match = normalized.match(/github\.com[:/]+([^/]+\/[^/]+)/i);
+    return match ? match[1] : null;
+}
+
+function compareSemver(left, right) {
+    const l = String(left).split(".").map((v) => Number(v) || 0);
+    const r = String(right).split(".").map((v) => Number(v) || 0);
+    const len = Math.max(l.length, r.length);
+    for (let i = 0; i < len; i++) {
+        const li = l[i] ?? 0;
+        const ri = r[i] ?? 0;
+        if (li > ri) {
+            return 1;
+        }
+        if (li < ri) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+const appRepo = getGitHubRepoFromUrl(packageMetadata.repository?.url) ?? "OrangeJedi/Aerial";
+const appRepoUrl = `https://github.com/${appRepo}`;
+const appReleasesUrl = `${appRepoUrl}/releases`;
+const appWikiUrl = `${appRepoUrl}/wiki`;
+const appLicenseUrl = `${appRepoUrl}/blob/HEAD/LICENSE`;
+
+function setRepositoryMetadata() {
+    store.set('repositoryUrl', appRepoUrl);
+    store.set('releasesUrl', appReleasesUrl);
+    store.set('wikiUrl', appWikiUrl);
+    store.set('licenseUrl', appLicenseUrl);
+    store.set('upstreamRepositoryUrl', UPSTREAM_REPO_URL);
+}
 
 //initialize variables
 let screens = [];
@@ -329,6 +372,7 @@ app.allowRendererProcessReuse = true
 app.whenReady().then(startUp);
 
 function startUp() {
+    setRepositoryMetadata();
     //Uncomment the line below when compiling the .scr file
     //store.set('useTray', false);
     let firstTime = false;
@@ -412,6 +456,8 @@ function setUpConfigFile() {
     store.set('lockAfterRunAfter', store.get('lockAfterRunAfter') ?? 15);
     store.set('runOnBattery', store.get('runOnBattery') ?? true);
     store.set('updateAvailable', false);
+    setRepositoryMetadata();
+    store.set('debugPlayback', store.get('debugPlayback') ?? false);
     store.set('enableGlobalShortcut', store.get('enableGlobalShortcut') ?? true);
     store.set('globalShortcutModifier1', store.get('globalShortcutModifier1') ?? "Super");
     store.set('globalShortcutModifier2', store.get('globalShortcutModifier2') ?? "+Control");
@@ -517,39 +563,56 @@ function setUpConfigFile() {
 
 //check for update on GitHub
 function checkForUpdate() {
-    https.get('https://raw.githubusercontent.com/OrangeJedi/Aerial/master/package.json', (response) => {
-        if (response.statusCode !== 200) {
-            console.log(`Error checking for updates: HTTP ${response.statusCode}`);
-            response.resume();
+    store.set('updateAvailable', false);
+    if (!app.isPackaged) {
+        return;
+    }
+
+    const branches = ["main", "master"];
+    const fetchBranchPackage = (index) => {
+        if (index >= branches.length) {
+            console.log(`Error checking for updates: unable to read package.json from ${appRepoUrl} (main/master).`);
             return;
         }
 
-        let body = '';
-        response.setEncoding('utf8');
-        response.on('data', (chunk) => {
-            body += chunk;
-        });
+        const branch = branches[index];
+        const packageUrl = `https://raw.githubusercontent.com/${appRepo}/${branch}/package.json`;
+        https.get(packageUrl, (response) => {
+            if (response.statusCode !== 200) {
+                response.resume();
+                fetchBranchPackage(index + 1);
+                return;
+            }
 
-        response.on('end', () => {
-            store.set('updateAvailable', false);
-            try {
-                const onlinePackage = JSON.parse(body);
-                if (onlinePackage.version && app.isPackaged) {
-                    if (onlinePackage.version[0] > app.getVersion()[0] || onlinePackage.version[2] > app.getVersion()[2] || onlinePackage.version[4] > app.getVersion()[4]) {
+            let body = '';
+            response.setEncoding('utf8');
+            response.on('data', (chunk) => {
+                body += chunk;
+            });
+
+            response.on('end', () => {
+                try {
+                    const onlinePackage = JSON.parse(body);
+                    if (!onlinePackage.version) {
+                        return;
+                    }
+                    if (compareSemver(onlinePackage.version, app.getVersion()) > 0) {
                         store.set('updateAvailable', onlinePackage.version);
                         new Notification({
                             title: "An update for Aerial is available",
-                            body: `Version ${onlinePackage.version} is available for download. Visit https://github.com/OrangeJedi/Aerial/releases to update Aerial.`
-                        }).show()
+                            body: `Version ${onlinePackage.version} is available for download. Visit ${appReleasesUrl} to update Aerial.`
+                        }).show();
                     }
+                } catch (error) {
+                    console.log("Error parsing update response:", error);
                 }
-            } catch (error) {
-                console.log("Error parsing update response:", error);
-            }
+            });
+        }).on('error', () => {
+            fetchBranchPackage(index + 1);
         });
-    }).on('error', (error) => {
-        console.log("Error checking for updates: ", error);
-    });
+    };
+
+    fetchBranchPackage(0);
 }
 
 //events from browser windows
@@ -736,7 +799,12 @@ ipcMain.on('newGlobalShortcut', (event) => {
 });
 
 ipcMain.on('consoleLog', (event, msg) => {
-    console.log(msg);
+    const line = `${new Date().toISOString()} ${msg}`;
+    console.log(line);
+    if (store.get('debugPlayback')) {
+        fs.appendFile(path.join(app.getPath('userData'), "aerial-debug.log"), `${line}\n`, () => {
+        });
+    }
 });
 
 //events from the system
