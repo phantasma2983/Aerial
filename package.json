@@ -24,11 +24,11 @@
     "electron-builder": "^24.0.0"
   },
   "dependencies": {
-    "auto-launch": "*",
-    "electron-store": "*",
-    "font-list-universal": "*",
-    "json-beautify": "*",
-    "suncalc": "*"
+    "auto-launch": "~5.0.6",
+    "electron-store": "~11.0.2",
+    "font-list-universal": "~1.0.0",
+    "json-beautify": "~1.1.1",
+    "suncalc": "~1.9.0"
   },
   "build": {
     "win": {
@@ -44,7 +44,6 @@
       "useZip": true
     },
     "files": [
-      "!documentation/*",
       "!images/*"
     ],
     "icon": "icon.ico",
