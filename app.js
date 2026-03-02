@@ -678,6 +678,22 @@ app.on('window-all-closed', (event) => {
         createTrayWindow();
     }
 });
+app.on('render-process-gone', (_event, webContents, details) => {
+    logLifecycle("app:render-process-gone", {
+        id: webContents?.id,
+        reason: details?.reason,
+        exitCode: details?.exitCode
+    });
+});
+app.on('child-process-gone', (_event, details) => {
+    logLifecycle("app:child-process-gone", {
+        type: details?.type,
+        reason: details?.reason,
+        exitCode: details?.exitCode,
+        serviceName: details?.serviceName,
+        name: details?.name
+    });
+});
 process.on('beforeExit', (code) => {
     logLifecycle("process:beforeExit", {code});
 });
@@ -1546,7 +1562,7 @@ function closeAllWindows() {
     const windowsToClose = [...screens];
     for (let i = 0; i < windowsToClose.length; i++) {
         if (!windowsToClose[i].isDestroyed()) {
-            windowsToClose[i].close();
+            windowsToClose[i].destroy();
         }
     }
     screens = [];
