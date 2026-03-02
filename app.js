@@ -906,6 +906,15 @@ ipcMain.on('openConfigFolder', (event) => {
     shell.openExternal(app.getPath('userData'));
 });
 
+ipcMain.on('openPlaybackLog', () => {
+    const logPath = path.join(app.getPath('userData'), "aerial-debug.log");
+    if (fs.existsSync(logPath)) {
+        shell.openPath(logPath);
+        return;
+    }
+    shell.openExternal(app.getPath('userData'));
+});
+
 ipcMain.on('selectCustomLocation', async (event, arg) => {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
     const result = await dialog.showOpenDialog(ownerWindow, {

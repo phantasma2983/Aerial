@@ -24,9 +24,12 @@ const opacityAnimationState = new WeakMap();
 const debugPlayback = electron.store.get("debugPlayback") ?? false;
 const playbackMetrics = {
     transitionRequests: 0,
+    transitionQueued: 0,
     transitionStarts: 0,
     transitionCompletes: 0,
     transitionFailures: 0,
+    staleCanPlayEvents: 0,
+    prebufferTimeoutStarts: 0,
     transitionStartLatencyMs: 0,
     transitionDurationMs: 0,
     prebufferWaitMs: 0,
@@ -95,6 +98,7 @@ function renderMetricsOverlay() {
         `video: ${playbackMetrics.selectedVideoId || "-"}`,
         `source: ${playbackMetrics.selectedSource || "-"}`,
         `transition req/start/done/fail: ${playbackMetrics.transitionRequests}/${playbackMetrics.transitionStarts}/${playbackMetrics.transitionCompletes}/${playbackMetrics.transitionFailures}`,
+        `queued: ${playbackMetrics.transitionQueued} | stale canplay: ${playbackMetrics.staleCanPlayEvents} | timeout starts: ${playbackMetrics.prebufferTimeoutStarts}`,
         `latency ms: ${Math.round(playbackMetrics.transitionStartLatencyMs)} | transition ms: ${Math.round(playbackMetrics.transitionDurationMs)} | prebuffer ms: ${Math.round(playbackMetrics.prebufferWaitMs)}`,
         `frame avg/p95 ms: ${avg}/${p95} | dropped(est): ${playbackMetrics.droppedFrameEstimate}`
     ].join("\n");
@@ -280,6 +284,7 @@ function newVideo(direction = "next") {
     playbackMetrics.transitionRequests++;
     pendingTransitionRequestedAt = performance.now();
     if (videoChangeInProgress) {
+        playbackMetrics.transitionQueued++;
         queuedDirection = direction;
         logPlayback("newVideo queued", {direction});
         return;
@@ -296,13 +301,21 @@ function newVideo(direction = "next") {
         }
         clearTimeout(videoWaitingTimeout);
         let started = false;
-        const onCanPlay = () => {
+        const onCanPlay = (source) => {
             if (started || blackScreen) {
                 return;
             }
             started = true;
             clearTimeout(videoWaitingTimeout);
+            if (source === "timeout") {
+                playbackMetrics.prebufferTimeoutStarts++;
+                logPlayback("canplay fallback timeout hit", {
+                    targetPlayer,
+                    readyState: containers[targetPlayer].readyState
+                });
+            }
             if (prePlayer !== targetPlayer) {
+                playbackMetrics.staleCanPlayEvents++;
                 logPlayback("stale onCanPlay ignored", {targetPlayer, currentPlayer, prePlayer});
                 return;
             }
@@ -325,13 +338,13 @@ function newVideo(direction = "next") {
         };
 
         if (containers[targetPlayer].readyState >= 3) {
-            onCanPlay();
+            onCanPlay("readyState");
             return;
         }
 
-        containers[targetPlayer].addEventListener('canplay', onCanPlay, {once: true});
+        containers[targetPlayer].addEventListener('canplay', () => onCanPlay("canplay"), {once: true});
         //fail-safe in case a driver never reports canplay
-        videoWaitingTimeout = setTimeout(onCanPlay, 1500);
+        videoWaitingTimeout = setTimeout(() => onCanPlay("timeout"), 1500);
     });
 }
 

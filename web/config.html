@@ -339,6 +339,15 @@
                            onclick="updateSetting('videoQuality','check')">
                     <label for="videoQuality">Disable all video processing</label>
                     <br>
+                    <input type="checkbox" id="debugPlayback" class="w3-check"
+                           onclick="updateSetting('debugPlayback','check')">
+                    <label for="debugPlayback">Enable playback diagnostics overlay + logging</label>
+                    <br>
+                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                            onclick="electron.ipcRenderer.send('openPlaybackLog');">
+                        Open Playback Log
+                    </button>
+                    <br>
                     <hr>
                     <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
                             onclick="electron.ipcRenderer.send('openConfigFolder');">

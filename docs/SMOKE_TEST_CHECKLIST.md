@@ -4,7 +4,7 @@
 - Launch configuration window (`/c`) and verify settings render.
 - Launch preview (`/t`) and verify first video starts.
 - Verify transition executes between 2+ clips without black-frame stalls.
-- With `debugPlayback=true`, verify metrics overlay updates transition and frame stats.
+- In `Settings -> Advanced`, enable `debugPlayback` and verify metrics overlay updates transition and frame stats.
 
 ## Multi-monitor
 - Connect 2 displays and launch screensaver (`/s`).
