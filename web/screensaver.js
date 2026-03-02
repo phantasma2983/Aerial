@@ -14,7 +14,6 @@ let randomType, randomDirection;
 let nextVideoTimeout;
 let videoChangeInProgress = false;
 let queuedDirection = null;
-let onTransitionComplete = null;
 let textTransitionTimeout = null;
 let randomTextTransitionInProgress = false;
 let textVisibilitySignaled = false;
@@ -42,6 +41,17 @@ let metricsOverlay = null;
 let metricsOverlayInterval = null;
 let activeTransitionStartedAt = 0;
 let pendingTransitionRequestedAt = 0;
+
+function once(callback) {
+    let called = false;
+    return () => {
+        if (called || !callback) {
+            return;
+        }
+        called = true;
+        callback();
+    };
+}
 
 function getTextTransitionDurationMs(setting, fallbackMs) {
     const parsed = Number(electron.store.get(setting));
@@ -331,8 +341,7 @@ function newVideo(direction = "next") {
                 readyState: containers[targetPlayer].readyState
             });
             playVideo(targetPlayer, () => {
-                onTransitionComplete = completeVideoChange;
-                runTransitionIn(transitionLength);
+                runTransitionIn(transitionLength, completeVideoChange);
                 scheduleNextVideo();
             });
         };
@@ -381,11 +390,6 @@ function switchVideoContainers() {
     if (activeTransitionStartedAt > 0) {
         playbackMetrics.transitionDurationMs = performance.now() - activeTransitionStartedAt;
         activeTransitionStartedAt = 0;
-    }
-    if (onTransitionComplete) {
-        const callback = onTransitionComplete;
-        onTransitionComplete = null;
-        callback();
     }
 }
 
@@ -440,16 +444,17 @@ let transitionPercent = 1;
 let transitionSource = "";
 const useModernTransitions = !electron.store.get("videoQuality") && (electron.store.get("modernTransitions") ?? true);
 
-function runTransitionIn(time) {
+function runTransitionIn(time, onComplete) {
+    const complete = once(onComplete);
     if (useModernTransitions) {
-        transitionVideosModern(time);
+        transitionVideosModern(time, complete);
         return;
     }
     clearTimeout(transitionTimeout);
-    fadeVideoIn(time);
+    fadeVideoIn(time, complete);
 }
 
-function transitionVideosModern(time) {
+function transitionVideosModern(time, onComplete) {
     drawDynamicText();
     const fromVideo = containers[currentPlayer];
     const toVideo = containers[prePlayer];
@@ -470,6 +475,7 @@ function transitionVideosModern(time) {
         fromVideo.style.transition = '';
         toVideo.style.transition = '';
         transitionTimeout = null;
+        onComplete();
     }, time);
 }
 
@@ -570,7 +576,7 @@ function fadeInTextOverlay(duration = textFadeInDuration) {
     animateOpacity(overlay, 0, 1, duration);
 }
 
-function fadeVideoIn(time) {
+function fadeVideoIn(time, onComplete) {
     if (time === transitionLength) {
         if (transitionSettings.type === "random") {
             randomType = true;
@@ -583,7 +589,7 @@ function fadeVideoIn(time) {
         }
     }
     if (time > 0) {
-        transitionTimeout = setTimeout(fadeVideoIn, 16, time - 16);
+        transitionTimeout = setTimeout(() => fadeVideoIn(time - 16, onComplete), 16);
     }
     transitionPercent = 1 - (time / transitionLength);
 
@@ -603,6 +609,7 @@ function fadeVideoIn(time) {
         if (randomDirection) {
             transitionSettings.direction = "random";
         }
+        onComplete();
     }
 }
 
