@@ -12,8 +12,11 @@ let numErrors = 1;
 let screenNumber = null;
 let randomType, randomDirection;
 let nextVideoTimeout;
-let videoChangeInProgress = false;
-let queuedDirection = null;
+const videoChangeState = {
+    inProgress: false,
+    queuedDirection: null,
+    waitingTimeout: null
+};
 let textTransitionTimeout = null;
 let randomTextTransitionInProgress = false;
 let textVisibilitySignaled = false;
@@ -278,13 +281,18 @@ function playVideo(videoContainer, loadedCallback) {
     }
 }
 
-let videoWaitingTimeout;
+function clearVideoWaitingTimeout() {
+    if (videoChangeState.waitingTimeout) {
+        clearTimeout(videoChangeState.waitingTimeout);
+        videoChangeState.waitingTimeout = null;
+    }
+}
 
 function completeVideoChange() {
-    videoChangeInProgress = false;
-    if (queuedDirection) {
-        const direction = queuedDirection;
-        queuedDirection = null;
+    videoChangeState.inProgress = false;
+    if (videoChangeState.queuedDirection) {
+        const direction = videoChangeState.queuedDirection;
+        videoChangeState.queuedDirection = null;
         newVideo(direction);
     }
 }
@@ -293,13 +301,13 @@ function newVideo(direction = "next") {
     clearTimeout(nextVideoTimeout);
     playbackMetrics.transitionRequests++;
     pendingTransitionRequestedAt = performance.now();
-    if (videoChangeInProgress) {
+    if (videoChangeState.inProgress) {
         playbackMetrics.transitionQueued++;
-        queuedDirection = direction;
+        videoChangeState.queuedDirection = direction;
         logPlayback("newVideo queued", {direction});
         return;
     }
-    videoChangeInProgress = true;
+    videoChangeState.inProgress = true;
     const targetPlayer = prePlayer;
     logPlayback("newVideo requested", {currentPlayer, prePlayer: targetPlayer});
     prepVideo(targetPlayer, direction, (prepared) => {
@@ -309,14 +317,14 @@ function newVideo(direction = "next") {
             completeVideoChange();
             return;
         }
-        clearTimeout(videoWaitingTimeout);
+        clearVideoWaitingTimeout();
         let started = false;
         const onCanPlay = (source) => {
             if (started || blackScreen) {
                 return;
             }
             started = true;
-            clearTimeout(videoWaitingTimeout);
+            clearVideoWaitingTimeout();
             if (source === "timeout") {
                 playbackMetrics.prebufferTimeoutStarts++;
                 logPlayback("canplay fallback timeout hit", {
@@ -353,7 +361,10 @@ function newVideo(direction = "next") {
 
         containers[targetPlayer].addEventListener('canplay', () => onCanPlay("canplay"), {once: true});
         //fail-safe in case a driver never reports canplay
-        videoWaitingTimeout = setTimeout(() => onCanPlay("timeout"), 1500);
+        videoChangeState.waitingTimeout = setTimeout(() => {
+            videoChangeState.waitingTimeout = null;
+            onCanPlay("timeout");
+        }, 1500);
     });
 }
 
@@ -1235,14 +1246,14 @@ ensureMetricsOverlay();
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
         clearTimeout(nextVideoTimeout);
-        clearTimeout(videoWaitingTimeout);
+        clearVideoWaitingTimeout();
         return;
     }
     if (!textVisibilitySignaled && document.visibilityState === "visible") {
         textVisibilitySignaled = true;
         startInitialTextFadeIfReady();
     }
-    if (!videoChangeInProgress && !blackScreen) {
+    if (!videoChangeState.inProgress && !blackScreen) {
         scheduleNextVideo();
     }
 });
