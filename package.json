@@ -26,7 +26,7 @@
   },
   "dependencies": {
     "auto-launch": "~5.0.6",
-    "electron-store": "~11.0.2",
+    "electron-store": "~8.2.0",
     "font-list-universal": "~1.0.0",
     "json-beautify": "~1.1.1",
     "suncalc": "~1.9.0"
