@@ -125,6 +125,10 @@ let suspendCountdown;
 let isComputerSleeping = false;
 let isComputerSuspendedOrLocked = false;
 let isAppQuitting = false;
+const launchedAsScreensaverSession = process.argv.some((arg) => {
+    const normalized = String(arg || "").toLowerCase();
+    return normalized === "/s" || normalized === "/p" || normalized === "/t";
+});
 let launchScreensaverBusy = false;
 let fullscreenCheckInProgress = false;
 let foregroundFullscreenCache = {value: false, checkedAt: 0};
@@ -589,6 +593,13 @@ function createTrayWindow() {
 app.allowRendererProcessReuse = true
 app.on('before-quit', () => {
     isAppQuitting = true;
+});
+app.on('window-all-closed', (event) => {
+    if (isAppQuitting || launchedAsScreensaverSession || !store.get('useTray')) {
+        return;
+    }
+    event.preventDefault();
+    createTrayWindow();
 });
 app.whenReady().then(startUp);
 
