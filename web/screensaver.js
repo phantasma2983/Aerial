@@ -2,6 +2,7 @@ const videos = electron.videos;
 const allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
 let customVideos = electron.store.get("customVideos");
+const {getVideoSource} = electron.videoUtils;
 let currentlyPlaying = '';
 let transitionTimeout;
 let poiTimeout = [];
@@ -103,33 +104,6 @@ function videoError(event) {
     }
 }
 
-function getVideoSource(videoInfo) {
-    if (!videoInfo || !videoInfo.src) {
-        return undefined;
-    }
-    const preferredType = electron.store.get('videoFileType');
-    const aliases = {
-        H2651080p: "HEVC1080p",
-        H2654k: "HEVC2160p"
-    };
-    const resolvedPreferredType = aliases[preferredType] ?? preferredType;
-    if (videoInfo.src[resolvedPreferredType]) {
-        return videoInfo.src[resolvedPreferredType];
-    }
-    const fallbackOrder = ["H2641080p", "HEVC1080p", "HEVC2160p"];
-    for (const type of fallbackOrder) {
-        if (videoInfo.src[type]) {
-            return videoInfo.src[type];
-        }
-    }
-    for (const value of Object.values(videoInfo.src)) {
-        if (typeof value === "string" && value.length > 0) {
-            return value;
-        }
-    }
-    return undefined;
-}
-
 function prepVideo(videoContainer, direction, callback) {
     if (blackScreen) {
         if (callback) {
@@ -174,7 +148,7 @@ function prepVideo(videoContainer, direction, callback) {
             }
             videoInfo = videos[index];
             downloadedVideos = electron.store.get("downloadedVideos");
-            videoSRC = getVideoSource(videoInfo);
+            videoSRC = getVideoSource(videoInfo, electron.store.get('videoFileType'));
             if (downloadedVideos.includes(videoInfo.id)) {
                 videoSRC = `${electron.store.get('cachePath')}/${videoInfo.id}.mov`;
             }

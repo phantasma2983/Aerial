@@ -21,6 +21,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require("path");
 const AutoLaunch = require('auto-launch');
+const {getVideoSource, sanitizeExtraVideo} = require('./shared/video-utils');
 let autoLauncher = new AutoLaunch({
     name: 'Aerial',
 });
@@ -69,47 +70,6 @@ function setRepositoryMetadata() {
     store.set('upstreamRepositoryUrl', UPSTREAM_REPO_URL);
 }
 
-function isValidVideoSourceMap(src) {
-    if (!src || typeof src !== "object") {
-        return false;
-    }
-    return Object.values(src).some((value) => typeof value === "string" && value.trim().length > 0);
-}
-
-function sanitizeExtraVideo(video) {
-    if (!video || typeof video !== "object") {
-        return null;
-    }
-    if (typeof video.id !== "string" || video.id.trim().length === 0 || video.id.startsWith("_")) {
-        return null;
-    }
-    if (!isValidVideoSourceMap(video.src)) {
-        return null;
-    }
-
-    const trimmedId = video.id.trim();
-    const src = {};
-    for (const [key, value] of Object.entries(video.src)) {
-        if (typeof value === "string" && value.trim().length > 0) {
-            src[key] = value.trim();
-        }
-    }
-    if (!isValidVideoSourceMap(src)) {
-        return null;
-    }
-
-    return {
-        ...video,
-        id: trimmedId,
-        src,
-        type: typeof video.type === "string" && video.type.trim().length > 0 ? video.type : "landscape",
-        timeOfDay: typeof video.timeOfDay === "string" && video.timeOfDay.trim().length > 0 ? video.timeOfDay : "none",
-        name: typeof video.name === "string" && video.name.trim().length > 0 ? video.name.trim() : undefined,
-        accessibilityLabel: typeof video.accessibilityLabel === "string" && video.accessibilityLabel.trim().length > 0 ? video.accessibilityLabel.trim() : (video.name ?? trimmedId),
-        userAdded: true
-    };
-}
-
 function getExtraVideos() {
     const extras = store.get("extraVideos") ?? [];
     if (!Array.isArray(extras)) {
@@ -146,33 +106,6 @@ function syncVideoCatalog() {
     store.set("extraVideos", extras);
     store.set("videoCatalog", catalog);
     return catalog;
-}
-
-function getVideoSource(videoInfo) {
-    if (!videoInfo || !videoInfo.src) {
-        return undefined;
-    }
-    const preferredType = store.get('videoFileType');
-    const aliases = {
-        H2651080p: "HEVC1080p",
-        H2654k: "HEVC2160p"
-    };
-    const resolvedPreferredType = aliases[preferredType] ?? preferredType;
-    if (videoInfo.src[resolvedPreferredType]) {
-        return videoInfo.src[resolvedPreferredType];
-    }
-    const fallbackOrder = ["H2641080p", "HEVC1080p", "HEVC2160p"];
-    for (const fallbackType of fallbackOrder) {
-        if (videoInfo.src[fallbackType]) {
-            return videoInfo.src[fallbackType];
-        }
-    }
-    for (const value of Object.values(videoInfo.src)) {
-        if (typeof value === "string" && value.length > 0) {
-            return value;
-        }
-    }
-    return undefined;
 }
 
 //initialize variables
@@ -634,25 +567,6 @@ function createTrayWindow() {
     trayWin.tray.setToolTip("Aerial");
 }
 
-function createJSONConfigWindow() {
-    let win = new BrowserWindow({
-        width: 1920,
-        height: 1080,
-        webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            enableRemoteModule: false,
-            sandbox: false,
-            preload: path.join(__dirname, "json-editor", "preload.js")
-        },
-        icon: path.join(__dirname, 'icon.ico')
-    });
-    win.loadFile('json-editor/index.html');
-    win.on('closed', function () {
-        win = null;
-    });
-}
-
 //start up code
 app.allowRendererProcessReuse = true
 app.whenReady().then(startUp);
@@ -705,8 +619,6 @@ function startUp() {
         createSSWindow(process.argv);
     } else if (process.argv.includes("/t")) {
         createSSPWindow(process.argv);
-    } else if (process.argv.includes("/j")) {
-        createJSONConfigWindow();
     } else {
         if (store.get('useTray')) {
             createTrayWindow();
@@ -1240,47 +1152,58 @@ function updateCustomVideos() {
 }
 
 function downloadFile(file_url, targetPath, callback) {
-    // Save variable to know progress
-    var received_bytes = 0;
-    var total_bytes = 0;
+    let receivedBytes = 0;
+    let totalBytes = 0;
 
-    agentOptions = {
-        host: 'sylvan.apple.com', path: '/', rejectUnauthorized: false
-    };
-
-    let agent = new https.Agent(agentOptions);
-
-    let req = request({
-        method: 'GET', uri: file_url, agent: agent
+    const url = new URL(file_url);
+    const agent = new https.Agent({
+        host: url.hostname,
+        rejectUnauthorized: false
     });
 
-    let out = fs.createWriteStream(targetPath);
-    req.pipe(out);
+    const request = https.get(url, {agent}, (response) => {
+        if (response.statusCode && response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+            response.resume();
+            downloadFile(response.headers.location, targetPath, callback);
+            return;
+        }
 
-    req.on('response', function (data) {
-        // Change the total bytes value to get progress later.
-        total_bytes = parseInt(data.headers['content-length']);
+        if (response.statusCode !== 200) {
+            response.resume();
+            callback(false);
+            return;
+        }
+
+        totalBytes = Number(response.headers['content-length']) || 0;
+        const output = fs.createWriteStream(targetPath);
+
+        response.on('data', (chunk) => {
+            receivedBytes += chunk.length;
+            showProgress(receivedBytes, totalBytes);
+        });
+
+        output.on('finish', () => {
+            output.close(() => callback(true));
+        });
+
+        output.on('error', () => {
+            output.destroy();
+            callback(false);
+        });
+
+        response.on('error', () => {
+            output.destroy();
+            callback(false);
+        });
+
+        response.pipe(output);
     });
 
-    req.on('data', function (chunk) {
-        // Update the received bytes
-        received_bytes += chunk.length;
-
-        showProgress(received_bytes, total_bytes);
-    });
-
-    req.on('end', function (e) {
-        //console.log("File successfully downloaded");
-        callback();
-    });
-
-    req.on('error', function (err) {
-        //console.error(err)
-    });
+    request.on('error', () => callback(false));
 
     function showProgress(received, total) {
-        let percentage = (received * 100) / total;
-        //console.log(percentage + "% | " + received + " bytes out of " + total + " bytes.");
+        const percentage = total > 0 ? (received * 100) / total : 0;
+        return percentage;
     }
 }
 
@@ -1300,13 +1223,17 @@ function downloadVideos() {
             if (index === -1) {
                 continue;
             }
-            const videoSource = getVideoSource(videos[index]);
+            const videoSource = getVideoSource(videos[index], store.get('videoFileType'));
             if (!videoSource) {
                 continue;
             }
             //console.log(allowedVideos[i]);
             //console.log(`Downloading ${videos[index].name}`);
-            downloadFile(videoSource, `${cachePath}/temp/${allowedVideos[i]}.mov`, () => {
+            downloadFile(videoSource, `${cachePath}/temp/${allowedVideos[i]}.mov`, (downloadSuccessful) => {
+                if (!downloadSuccessful) {
+                    downloadVideos();
+                    return;
+                }
                 fs.copyFileSync(`${cachePath}/temp/${allowedVideos[i]}.mov`, `${cachePath}/${allowedVideos[i]}.mov`);
                 fs.unlink(`${cachePath}/temp/${allowedVideos[i]}.mov`, (err) => {
                 });
