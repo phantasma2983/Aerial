@@ -8,6 +8,7 @@ let alwaysDownloadVideos = electron.store.get("alwaysDownloadVideos");
 let neverDownloadVideos = electron.store.get("neverDownloadVideos");
 let customVideos = electron.store.get("customVideos");
 let extraVideos = electron.store.get("extraVideos") ?? [];
+let fontList = [];
 refreshVideoCatalog();
 
 function refreshVideoCatalog() {
@@ -42,7 +43,7 @@ function displaySettings() {
     for (let i = 0; i < checked.length; i++) {
         $(`#${checked[i]}`).prop('checked', electron.store.get(checked[i]));
     }
-    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textColor", "startAfter", "blankAfter", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "previousSkipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
+    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textColor", "textLineHeight", "textFontWeight", "startAfter", "blankAfter", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "previousSkipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
     for (let i = 0; i < numTxt.length; i++) {
         $(`#${numTxt[i]}`).val(electron.store.get(numTxt[i]));
     }
@@ -64,7 +65,9 @@ function displaySettings() {
     displayExtraVideos();
     displayPlaybackSettings();
     displayCustomVideos();
+    populateGlobalFontSelect();
     colorTextPositionRadio();
+    syncSelectedTextPositionOptions();
     updateSettingVisibility();
 
     //display update, if there is one
@@ -611,12 +614,66 @@ function colorTextPositionRadio() {
     });
 }
 
+function syncSelectedTextPositionOptions() {
+    let selectedPosition = document.querySelector('input.imagePosition[name="imagePosition"]:checked');
+    if (!selectedPosition) {
+        selectedPosition = document.querySelector('input.imagePosition[name="imagePosition"][value="random"]')
+            || document.querySelector('input.imagePosition[name="imagePosition"]');
+        if (!selectedPosition) {
+            return;
+        }
+        selectedPosition.checked = true;
+    }
+    positionSelect(selectedPosition);
+}
+
 function loadScreenSelect() {
     let html = '<option value="">All Screens</option>'
     for (let i = 0; i < electron.store.get('numDisplays'); i++) {
         html += `<option value="${i}">Screen ${i + 1}</option>`
     }
     $('#screenSelectorSelect').html(html);
+}
+
+function escapeHtmlAttribute(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;");
+}
+
+function escapeHtmlText(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;");
+}
+
+function getFontOptionsHtml(selectedFont) {
+    const selected = String(selectedFont ?? "");
+    const optionFonts = [...fontList];
+    if (selected && !optionFonts.includes(selected)) {
+        optionFonts.unshift(selected);
+    }
+    if (optionFonts.length === 0) {
+        optionFonts.push(selected || "Segoe UI");
+    }
+    let html = "";
+    for (const font of optionFonts) {
+        const escapedValue = escapeHtmlAttribute(font);
+        const escapedLabel = escapeHtmlText(font);
+        html += `<option value="${escapedValue}" ${font === selected ? "selected" : ""}>${escapedLabel}</option>`;
+    }
+    return html;
+}
+
+function populateGlobalFontSelect() {
+    const fontSelect = document.getElementById("textFont");
+    if (!fontSelect) {
+        return;
+    }
+    const selectedFont = electron.store.get("textFont") ?? "";
+    fontSelect.innerHTML = getFontOptionsHtml(selectedFont);
 }
 
 loadScreenSelect();
@@ -643,10 +700,53 @@ function positionSelect(position) {
     lineSelect(position, 0);
 }
 
+function getPositionMaxWidth(textSettings, position) {
+    const maxWidthMap = textSettings.maxWidth;
+    if (maxWidthMap && typeof maxWidthMap === "object" && maxWidthMap[position]) {
+        return maxWidthMap[position];
+    }
+    const positionSettings = textSettings[position];
+    if (positionSettings && positionSettings.maxWidth) {
+        return positionSettings.maxWidth;
+    }
+    if (Array.isArray(positionSettings)) {
+        for (let i = 0; i < positionSettings.length; i++) {
+            if (positionSettings[i] && positionSettings[i].maxWidth) {
+                return positionSettings[i].maxWidth;
+            }
+        }
+    }
+    return "50%";
+}
+
+function updatePositionMaxWidth(position) {
+    let text = electron.store.get('displayText');
+    if (!text.maxWidth || typeof text.maxWidth !== "object" || Array.isArray(text.maxWidth)) {
+        text.maxWidth = {};
+    }
+    text.maxWidth[position] = $('#textWidthSelect').val();
+    electron.store.set('displayText', text);
+}
+
+function ensurePositionMaxWidth(position, maxWidth) {
+    let text = electron.store.get('displayText');
+    if (!text.maxWidth || typeof text.maxWidth !== "object" || Array.isArray(text.maxWidth)) {
+        text.maxWidth = {};
+    }
+    if (!text.maxWidth[position]) {
+        text.maxWidth[position] = maxWidth;
+        electron.store.set('displayText', text);
+    }
+}
+
 function lineSelect(position, line) {
-    let displayTextSettings = electron.store.get('displayText')[position][line];
-    document.getElementById("textWidthSelect").setAttribute('onchange', `updateTextSetting(this, '${position}','${line}', 'maxWidth')`);
-    $('#textWidthSelect').val(displayTextSettings.maxWidth ? displayTextSettings.maxWidth : "50%");
+    let textSettings = electron.store.get('displayText');
+    let positionSettings = textSettings[position];
+    let displayTextSettings = positionSettings[line];
+    const maxWidth = getPositionMaxWidth(textSettings, position);
+    ensurePositionMaxWidth(position, maxWidth);
+    document.getElementById("textWidthSelect").setAttribute('onchange', `updatePositionMaxWidth('${position}')`);
+    $('#textWidthSelect').val(maxWidth);
     $('#textWidthContainer').css('display', "inline-flex");
 
     $('#positionLineNum0').css("font-weight", "normal");
@@ -779,9 +879,11 @@ function updatePositionType(position, line) {
             activeLine.fontSize = activeLine.fontSize || electron.store.get('textSize');
             activeLine.fontColor = activeLine.fontColor || electron.store.get('textColor');
             html += `<div class="positionFontControls">
-                        <div class="autocomplete positionFontAutocomplete">
+                        <div class="positionFontAutocomplete">
                             <label for="positionFont">Font</label>
-                            <input id="positionFont" class="w3-input" type="text" onchange="updateTextSetting(this, '${position}','${line}', 'font')" value="${attrEscape(activeLine.font)}">
+                            <select id="positionFont" class="w3-input" onchange="updateTextSetting(this, '${position}','${line}', 'font')">
+                                ${getFontOptionsHtml(activeLine.font)}
+                            </select>
                         </div>
                         <div class="positionInlineRow">
                             <label for="positionTextSize">Font Size</label>
@@ -793,12 +895,6 @@ function updatePositionType(position, line) {
         }
 
         $('#positionDetails').html(html);
-        if (!activeLine.defaultFont) {
-            autocomplete(document.getElementById('positionFont'), fontList, (e) => {
-                updateTextSetting(e, position, line, 'font')
-            });
-        }
-        $('#textWidthContainer').css('display', "inline-flex");
 
         if (activeLine.type === "astronomy") {
             const astroInput = document.getElementById("positionAstroFormat");
@@ -808,7 +904,6 @@ function updatePositionType(position, line) {
         }
     } else {
         $('#positionDetails').html(html);
-        $('#textWidthContainer').css('display', "none");
     }
     electron.store.set('displayText', displayTextSettings);
     colorTextPositionRadio();
@@ -880,6 +975,9 @@ function selectTextSetting(item) {
         cards[i].style.display = "none";
     }
     document.getElementById(`${item}TextSettings`).style.display = "";
+    if (item === "position") {
+        syncSelectedTextPositionOptions();
+    }
 }
 
 //Video tab
@@ -1272,13 +1370,13 @@ document.addEventListener("click", function (e) {
     closeAllLists(e.target);
 });
 
-//Still autocomplete stuff. This part sets up our font lists
-let fontList = [];
+//Load available system fonts and populate the dropdowns
 electron.fontListUniversal.getFonts().then(fonts => {
-    autocomplete(document.getElementById('textFont'), fonts, () => {
-        updateSetting('textFont', 'autocomplete')
-    },);
-    fontList = fonts
+    fontList = Array.from(new Set(fonts)).sort((a, b) => a.localeCompare(b));
+    populateGlobalFontSelect();
+    syncSelectedTextPositionOptions();
+}).catch(() => {
+    populateGlobalFontSelect();
 });
 
 //Preview

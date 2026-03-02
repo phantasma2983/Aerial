@@ -822,6 +822,8 @@ function setUpConfigFile() {
     store.set('textFont', store.get('textFont') ?? "Segoe UI");
     store.set('textSize', store.get('textSize') ?? "2");
     store.set('textColor', store.get('textColor') ?? "#FFFFFF");
+    store.set('textLineHeight', store.get('textLineHeight') ?? "1.2");
+    store.set('textFontWeight', store.get('textFontWeight') ?? "400");
     let displayText = store.get('displayText');
     if (displayText) {
         if (!displayText.topleft[0]) {
@@ -839,8 +841,26 @@ function setUpConfigFile() {
         displayText.positionList.forEach((v) => {
             displayText[v] = temp;
         });
-        store.set('displayText', displayText);
     }
+    if (!displayText.maxWidth || typeof displayText.maxWidth !== "object" || Array.isArray(displayText.maxWidth)) {
+        displayText.maxWidth = {};
+    }
+    for (const position of displayText.positionList) {
+        if (!displayText.maxWidth[position]) {
+            const legacyArrayWidth = displayText[position]?.maxWidth;
+            let legacyLineWidth = undefined;
+            if (Array.isArray(displayText[position])) {
+                for (const line of displayText[position]) {
+                    if (line && line.maxWidth) {
+                        legacyLineWidth = line.maxWidth;
+                        break;
+                    }
+                }
+            }
+            displayText.maxWidth[position] = legacyArrayWidth || legacyLineWidth || "50%";
+        }
+    }
+    store.set('displayText', displayText);
     store.set('randomSpeed', store.get('randomSpeed') ?? 30);
     store.set('videoQuality', store.get('videoQuality') ?? false);
     store.set('modernTransitions', store.get('modernTransitions') ?? true);

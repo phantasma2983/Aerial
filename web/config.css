@@ -726,7 +726,7 @@ input[type="radio"] {
 }
 
 .positionTopBar .imagePositionRandom {
-    position: static;
+    position: relative;
     padding-left: 0;
     display: inline-flex;
     align-items: center;
@@ -737,6 +737,12 @@ input[type="radio"] {
     position: static;
     top: auto;
     margin: 0;
+}
+
+.positionTopBar .imagePositionRandom .imagePositionWithValue ~ label {
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 .positionTopBar #textWidthContainer {

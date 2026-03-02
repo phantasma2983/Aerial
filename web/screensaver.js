@@ -11,6 +11,9 @@ let numErrors = 1;
 let screenNumber = null;
 let randomType, randomDirection;
 let nextVideoTimeout;
+let videoChangeInProgress = false;
+let queuedDirection = null;
+let onTransitionComplete = null;
 const debugPlayback = electron.store.get("debugPlayback") ?? false;
 
 function logPlayback(message, details) {
@@ -103,10 +106,19 @@ function getVideoSource(videoInfo) {
 
 function prepVideo(videoContainer, direction, callback) {
     if (blackScreen) {
+        if (callback) {
+            callback(false);
+        }
         return
     }
     containers[videoContainer].src = "";
     electron.ipcRenderer.invoke('newVideoId', {lastPlayed: currentlyPlaying, direction: direction ?? "next"}).then((id) => {
+        if (!id) {
+            if (callback) {
+                callback(false);
+            }
+            return;
+        }
         let videoInfo, videoSRC;
         //grab video info and file location based on whether it is a custom video or not
         if (id[0] === "_") {
@@ -116,6 +128,9 @@ function prepVideo(videoContainer, direction, callback) {
                 }
             })];
             if (!videoInfo) {
+                if (callback) {
+                    callback(false);
+                }
                 return;
             }
             videoSRC = videoInfo.path;
@@ -126,6 +141,9 @@ function prepVideo(videoContainer, direction, callback) {
                 }
             });
             if (index === -1) {
+                if (callback) {
+                    callback(false);
+                }
                 return;
             }
             videoInfo = videos[index];
@@ -136,6 +154,9 @@ function prepVideo(videoContainer, direction, callback) {
             }
         }
         if (!videoSRC) {
+            if (callback) {
+                callback(false);
+            }
             return;
         }
         //load video in video player
@@ -145,7 +166,11 @@ function prepVideo(videoContainer, direction, callback) {
         containers[videoContainer].pause();
 
         if (callback) {
-            callback();
+            callback(true);
+        }
+    }).catch(() => {
+        if (callback) {
+            callback(false);
         }
     });
 }
@@ -168,10 +193,31 @@ function playVideo(videoContainer, loadedCallback) {
 
 let videoWaitingTimeout;
 
+function completeVideoChange() {
+    videoChangeInProgress = false;
+    if (queuedDirection) {
+        const direction = queuedDirection;
+        queuedDirection = null;
+        newVideo(direction);
+    }
+}
+
 function newVideo(direction = "next") {
+    clearTimeout(nextVideoTimeout);
+    if (videoChangeInProgress) {
+        queuedDirection = direction;
+        logPlayback("newVideo queued", {direction});
+        return;
+    }
+    videoChangeInProgress = true;
     const targetPlayer = prePlayer;
     logPlayback("newVideo requested", {currentPlayer, prePlayer: targetPlayer});
-    prepVideo(targetPlayer, direction, () => {
+    prepVideo(targetPlayer, direction, (prepared) => {
+        if (!prepared) {
+            logPlayback("newVideo prep failed", {targetPlayer});
+            completeVideoChange();
+            return;
+        }
         clearTimeout(videoWaitingTimeout);
         let started = false;
         const onCanPlay = () => {
@@ -192,6 +238,7 @@ function newVideo(direction = "next") {
                 readyState: containers[targetPlayer].readyState
             });
             playVideo(targetPlayer, () => {
+                onTransitionComplete = completeVideoChange;
                 runTransitionIn(transitionLength);
                 scheduleNextVideo();
             });
@@ -237,6 +284,11 @@ function switchVideoContainers() {
     transitionPercent = 1;
     prePlayer = temp;
     logPlayback("switchVideoContainers after", {currentPlayer, prePlayer});
+    if (onTransitionComplete) {
+        const callback = onTransitionComplete;
+        onTransitionComplete = null;
+        callback();
+    }
 }
 
 function drawDynamicText() {
@@ -280,7 +332,6 @@ function drawDynamicText() {
                 } else {
                     textArea.text(videoInfo[line.infoType]);
                 }
-                $(`#textDisplayArea-${position}`).css('width', line.maxWidth ? displayText[position].maxWidth : "50%");
             }
         }
     }
@@ -315,10 +366,12 @@ function transitionVideosModern(time) {
         toVideo.style.opacity = '1';
     });
 
-    setTimeout(() => {
+    clearTimeout(transitionTimeout);
+    transitionTimeout = setTimeout(() => {
         switchVideoContainers();
         fromVideo.style.transition = '';
         toVideo.style.transition = '';
+        transitionTimeout = null;
     }, time);
 }
 
@@ -676,7 +729,12 @@ function runClock(position, line, timeString) {
 }
 
 //set up css
-$('.displayText').css('font-family', `"${electron.store.get('textFont')}"`).css('font-size', `${electron.store.get('textSize')}vw`).css('color', `${electron.store.get('textColor')}`);
+$('.displayText')
+    .css('font-family', `"${electron.store.get('textFont')}"`)
+    .css('font-size', `${electron.store.get('textSize')}vw`)
+    .css('color', `${electron.store.get('textColor')}`)
+    .css('line-height', `${electron.store.get('textLineHeight')}`)
+    .css('font-weight', `${electron.store.get('textFontWeight')}`);
 
 //draw text
 let displayText = electron.store.get('displayText') ?? [];
@@ -704,9 +762,33 @@ function renderText() {
     }
 }
 
+function getPositionMaxWidth(position) {
+    const maxWidthMap = displayText.maxWidth;
+    if (maxWidthMap && typeof maxWidthMap === "object" && maxWidthMap[position]) {
+        return maxWidthMap[position];
+    }
+    const positionSettings = displayText[position];
+    if (!positionSettings) {
+        return "50%";
+    }
+    if (positionSettings.maxWidth) {
+        return positionSettings.maxWidth;
+    }
+    if (Array.isArray(positionSettings)) {
+        for (let i = 0; i < positionSettings.length; i++) {
+            if (positionSettings[i] && positionSettings[i].maxWidth) {
+                return positionSettings[i].maxWidth;
+            }
+        }
+    }
+    return "50%";
+}
+
 function displayTextPosition(position, displayLocation) {
     let selector = displayLocation ? `#textDisplay-${displayLocation}` : `#textDisplay-${position}`;
     let html = "";
+    $(selector).css('width', 'auto');
+    $(selector).css('max-width', getPositionMaxWidth(position));
     for (let i = 0; i < displayText[position].length; i++) {
         if (displayText[position][i].onlyShowOnScreen === undefined || Number(displayText[position][i].onlyShowOnScreen) === Number(screenNumber)) {
             html += `<div id="${position}-${i}" style="${displayText[position][i].customCSS}">${createContentLine(displayText[position][i], position, i)}</div>`;
@@ -829,7 +911,7 @@ function randomInt(min, max) {
 //play a video
 newVideo();
 
-electron.ipcRenderer.on('newVideo', (direction) => {
+electron.ipcRenderer.on('newVideo', (_event, direction) => {
     newVideo(direction === "previous" ? "previous" : "next");
 });
 

@@ -30,11 +30,25 @@
 }
 
 body {
-    background-color: transparent;
+    background-color: #000;
 }
 
 .textDisplayArea {
     padding: 2%;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+.textDisplayArea > div {
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+.textDisplayArea img {
+    max-width: 100%;
+    height: auto;
 }
 
 * {
