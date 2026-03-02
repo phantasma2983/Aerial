@@ -1,6 +1,7 @@
 const {contextBridge, ipcRenderer} = require("electron");
 const Store = require('electron-store');
 const {getVideoSource, sanitizeExtraVideo} = require('./shared/video-utils');
+const textUtils = require('./shared/text-utils');
 const store = new Store();
 const bundledVideos = require("./videos.json");
 
@@ -36,5 +37,6 @@ contextBridge.exposeInMainWorld("electron", {
         getVideoSource,
         sanitizeExtraVideo
     },
+    textUtils,
     fontListUniversal: require('font-list-universal')
 });

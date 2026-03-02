@@ -2,6 +2,7 @@
 //This list of allowed or 'checked' videos
 const bundledVideos = electron.bundledVideos ?? electron.videos;
 const {getVideoSource, sanitizeExtraVideo} = electron.videoUtils;
+const {FONT_SIZE_UNITS, normalizeOpacity, normalizeFontSizeUnit} = electron.textUtils;
 let videos = electron.store.get("videoCatalog") ?? electron.videos;
 let allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
@@ -40,7 +41,7 @@ function refreshVideoCatalog() {
 
 //Updates all the <input> tags with their proper values. Called on page load
 function displaySettings() {
-    let checked = ["timeOfDay", "skipVideosWithKey", "sameVideoOnScreens", "videoCache", "videoCacheProfiles", "videoCacheRemoveUnallowed", "avoidDuplicateVideos", "onlyShowVideoOnPrimaryMonitor", "videoQuality", "debugPlayback", "immediatelyUpdateVideoCache", "useTray", "blankScreen", "sleepAfterBlank", "lockAfterRun", "alternateRenderMethod", "useLocationForSunrise", "runOnBattery", "disableWhenFullscreenAppActive", "enableGlobalShortcut"];
+    let checked = ["timeOfDay", "skipVideosWithKey", "sameVideoOnScreens", "videoCache", "videoCacheProfiles", "videoCacheRemoveUnallowed", "avoidDuplicateVideos", "onlyShowVideoOnPrimaryMonitor", "videoQuality", "debugPlayback", "immediatelyUpdateVideoCache", "useTray", "blankScreen", "sleepAfterBlank", "lockAfterRun", "alternateRenderMethod", "alternateRenderAuto", "useLocationForSunrise", "runOnBattery", "disableWhenFullscreenAppActive", "enableGlobalShortcut"];
     for (let i = 0; i < checked.length; i++) {
         $(`#${checked[i]}`).prop('checked', electron.store.get(checked[i]));
     }
@@ -328,7 +329,7 @@ function resetFilterSettings() {
 //Updated input fields that may be effected by another input
 function updateSettingVisibility() {
     // Shows or hides the FPS settings for the alternate render method
-    if (electron.store.get("alternateRenderMethod")) {
+    if (electron.store.get("alternateRenderMethod") || electron.store.get("alternateRenderAuto")) {
         $("#alternateRenderMethodFPS").show(300);
     } else {
         $("#alternateRenderMethodFPS").hide(200);
@@ -603,14 +604,10 @@ function escapeHtmlText(value) {
         .replace(/</g, "&lt;");
 }
 
-const TEXT_SIZE_UNITS = ["vw", "vh", "vmin", "vmax", "rem", "em", "px", "%"];
+const TEXT_SIZE_UNITS = [...FONT_SIZE_UNITS];
 
 function normalizeTextSizeUnit(unit) {
-    const normalized = String(unit ?? "").trim().toLowerCase();
-    if (TEXT_SIZE_UNITS.includes(normalized)) {
-        return normalized;
-    }
-    return "vw";
+    return normalizeFontSizeUnit(unit, "vw");
 }
 
 function getTextSizeUnitOptionsHtml(selectedUnit) {
@@ -620,20 +617,6 @@ function getTextSizeUnitOptionsHtml(selectedUnit) {
         html += `<option value="${unit}" ${unit === selected ? "selected" : ""}>${unit}</option>`;
     }
     return html;
-}
-
-function normalizeOpacity(value, fallback = 1) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-        return fallback;
-    }
-    if (parsed < 0) {
-        return 0;
-    }
-    if (parsed > 1) {
-        return 1;
-    }
-    return parsed;
 }
 
 function getFontOptionsHtml(selectedFont) {

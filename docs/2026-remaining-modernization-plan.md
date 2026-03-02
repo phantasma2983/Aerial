@@ -13,56 +13,65 @@ This document tracks the **remaining** modernization work after completing:
 
 ---
 
-## Remaining work
+## Completion status (March 3, 2026)
 
-## 1) Rendering path simplification (highest remaining impact)
-1. Keep current default playback path, but reduce transition-state complexity in `web/screensaver.js`.
-2. Evaluate whether `alternateRenderMethod` should remain user-facing or become an automatic fallback.
-3. Add transition timing instrumentation (start latency, failures, retries, and dropped frame indicators).
+## 1) Rendering path simplification
+- Completed.
+1. Transition completion flow was refactored to explicit callbacks in `web/screensaver.js` (removed implicit global callback dependency).
+2. Video-change lifecycle state was consolidated into a single structured object (`videoChangeState`).
+3. Alternate render mode was evaluated and updated:
+   - manual force mode remains available for troubleshooting,
+   - automatic fallback mode (`alternateRenderAuto`) was added for multi-display canvas transitions.
+4. Transition instrumentation was expanded (queue count, stale canplay, timeout starts, dropped-frame estimate, render mode).
 
-**Output:** simpler transition code paths with better diagnostics.
+**Output achieved:** lower transition-state complexity with better diagnostics and fallback behavior.
 
 ## 2) Performance observability
-1. Add a debug overlay/log channel for:
+- Completed.
+1. Debug overlay/log channel is available and surfaces:
    - selected video id/source profile,
-   - transition duration and startup time,
-   - prebuffer wait duration.
-2. Add a basic smoke-test checklist for multi-monitor playback and transition reliability.
+   - render mode,
+   - transition startup/duration/prebuffer metrics,
+   - failure/queue/fallback counters and dropped-frame estimate.
+2. `debugPlayback` is configurable via `Settings -> Advanced`.
+3. Playback log can be opened from config (`Open Playback Log`).
+4. Smoke test checklist exists and is aligned with diagnostics (`docs/SMOKE_TEST_CHECKLIST.md`).
 
-**Output:** measurable data for regression checks before releases.
+**Output achieved:** measurable playback diagnostics for regression checks.
 
-## 3) Asset organization plan (images are still required)
-`assets/images/*` remains needed for project/docs purposes and should not be deleted.
+## 3) Asset organization plan
+- Completed.
+1. `assets/images/*` migration is complete.
+2. Repository/docs references are aligned (README/docs/package exclusions).
+3. Packaging exclusions remain aligned (`!assets/images/**`).
+4. Asset inventory is documented (`docs/ASSET_INVENTORY.md`).
 
-Proposed migration (future PR):
-1. Move image assets to `assets/images/*` (completed in this update).
-2. Update all repository references (e.g., README paths and any HTML/docs references).
-3. Keep Electron packaging exclusions aligned so non-runtime assets stay out of installers.
-4. Add `docs/ASSET_INVENTORY.md` mapping each asset to its purpose (runtime UI, docs, design source, etc.).
-
-**Output:** cleaner repository layout without breaking references.
+**Output achieved:** cleaner asset layout without runtime-path breakage.
 
 ## 4) Dependency/runtime follow-ups
-1. Address high-risk vulnerabilities where upgrades are compatible with Electron 22 runtime constraints.
-2. Plan a controlled Electron/electron-builder major upgrade branch with compatibility testing.
+- Completed with one documented compatibility constraint.
+1. Upgraded to latest major toolchain:
+   - `electron` -> `^40.6.1`
+   - `electron-builder` -> `^26.8.1`
+2. Added `overrides.semver=7.7.4` to address transitive vulnerability risk.
+3. Verified `npm audit` reports zero vulnerabilities.
+4. `electron-store` remains pinned at `~8.2.0` intentionally because current codebase relies on synchronous CommonJS `require(...)` access patterns in both `app.js` and `preload.js`; latest `electron-store` is ESM-only and would require a broader storage API migration.
 
-**Output:** reduced security/maintenance risk and clearer upgrade path.
+**Output achieved:** updated runtime/build stack with vulnerability remediation and explicit constraint documentation.
 
 ## 5) Optional cleanup
-1. Consolidate minor duplicated formatting logic in renderer scripts.
-2. Add lint configuration/documented lint command for repeatable static checks.
+- Completed.
+1. Consolidated duplicate renderer text-format helpers into shared module: `shared/text-utils.js`.
+2. Added centralized lint configuration and documented lint workflow:
+   - `scripts/lint-targets.json`
+   - `scripts/run-syntax-lint.js`
+   - `docs/DEVELOPMENT.md`
 
-**Output:** lower maintenance overhead.
+**Output achieved:** lower maintenance overhead and repeatable static checks.
 
 ---
 
-## Suggested execution order
-1. Rendering path simplification and instrumentation.
-2. Asset inventory + cleanup under `assets/images/*`.
-3. Dependency vulnerability remediation.
-4. Tooling/lint polish.
-
-## Exit criteria for the remaining plan
-- Transition behavior stable across single/multi-monitor setups.
-- Asset references continue to resolve after path migration.
-- CI/install checks are green with reproducible dependency resolution.
+## Exit criteria status
+- Transition behavior: implemented simplifications + instrumentation; ready for manual smoke validation.
+- Asset references: aligned with migration and packaging exclusions.
+- Install/build reproducibility: validated via `npm ci`, `npm run lint`, `npm run build`, and current `npm audit` (0 vulnerabilities).

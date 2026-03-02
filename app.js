@@ -715,6 +715,7 @@ function setUpConfigFile() {
         defaultValue: 0
     },]);
     store.set('alternateRenderMethod', store.get("alternateRenderMethod") ?? false);
+    store.set('alternateRenderAuto', store.get("alternateRenderAuto") ?? true);
     store.set('transitionType', store.get("transitionType") ?? "dissolve");
     store.set('transitionDirection', store.get("transitionDirection") ?? "");
     store.set('videoTransitionLength', store.get('videoTransitionLength') ?? 2000);

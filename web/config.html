@@ -207,8 +207,12 @@
                     <br>
                     <input type="checkbox" id="alternateRenderMethod" class="w3-check"
                            onclick="updateSetting('alternateRenderMethod','check');">
-                    <label for="alternateRenderMethod">Alternate Render Method
-                        <i>*Use this option if your screensaver freezes on multiple displays</i></label>
+                    <label for="alternateRenderMethod">Force Alternate Render Method
+                        <i>*Use this only if auto fallback is not enough</i></label>
+                    <br>
+                    <input type="checkbox" id="alternateRenderAuto" class="w3-check"
+                           onclick="updateSetting('alternateRenderAuto','check');">
+                    <label for="alternateRenderAuto">Automatically use alternate render fallback on multi-display canvas transitions</label>
                     <br>
                     <br>
                     <div id="alternateRenderMethodFPS">

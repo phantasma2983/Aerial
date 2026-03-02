@@ -3,6 +3,12 @@ const allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
 let customVideos = electron.store.get("customVideos");
 const {getVideoSource} = electron.videoUtils;
+const {
+    normalizeOpacity,
+    normalizeFontSizeUnit,
+    normalizeFontSizeValue,
+    getFontSizeCssValue
+} = electron.textUtils;
 let currentlyPlaying = '';
 let transitionTimeout;
 let poiTimeout = [];
@@ -38,7 +44,8 @@ const playbackMetrics = {
     droppedFrameEstimate: 0,
     frameTimes: [],
     selectedSource: "",
-    selectedVideoId: ""
+    selectedVideoId: "",
+    renderMode: ""
 };
 let metricsOverlay = null;
 let metricsOverlayInterval = null;
@@ -62,14 +69,6 @@ function getTextTransitionDurationMs(setting, fallbackMs) {
         return fallbackMs;
     }
     return Math.max(0, Math.min(10000, parsed));
-}
-
-function normalizeOpacity(value, fallback = 1) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed)) {
-        return fallback;
-    }
-    return Math.min(1, Math.max(0, parsed));
 }
 
 const textFadeInDuration = getTextTransitionDurationMs("textFadeInDuration", 650);
@@ -110,6 +109,7 @@ function renderMetricsOverlay() {
     metricsOverlay.textContent = [
         `video: ${playbackMetrics.selectedVideoId || "-"}`,
         `source: ${playbackMetrics.selectedSource || "-"}`,
+        `render: ${playbackMetrics.renderMode || "-"}`,
         `transition req/start/done/fail: ${playbackMetrics.transitionRequests}/${playbackMetrics.transitionStarts}/${playbackMetrics.transitionCompletes}/${playbackMetrics.transitionFailures}`,
         `queued: ${playbackMetrics.transitionQueued} | stale canplay: ${playbackMetrics.staleCanPlayEvents} | timeout starts: ${playbackMetrics.prebufferTimeoutStarts}`,
         `latency ms: ${Math.round(playbackMetrics.transitionStartLatencyMs)} | transition ms: ${Math.round(playbackMetrics.transitionDurationMs)} | prebuffer ms: ${Math.round(playbackMetrics.prebufferWaitMs)}`,
@@ -867,11 +867,34 @@ containers.forEach((container, index) => {
 // Fix for issue #110
 // Replace requestAnimationFrame with our own that never sleeps
 const drawVideoRequests = [];
-const animationFPS = electron.store.get("fps")
-const useAlternateRenderMethod = electron.store.get("alternateRenderMethod")
+const animationFPS = Number(electron.store.get("fps")) || 60;
+const forceAlternateRenderMethod = electron.store.get("alternateRenderMethod") ?? false;
+const autoAlternateRenderMethod = (electron.store.get("alternateRenderAuto") ?? true)
+    && !forceAlternateRenderMethod
+    && !electron.store.get("videoQuality")
+    && !useModernTransitions
+    && Number(electron.store.get("numDisplays") ?? 1) > 1;
+const useAlternateRenderMethod = forceAlternateRenderMethod || autoAlternateRenderMethod;
 let videoQuality = electron.store.get("videoQuality");
+const shouldRenderWithCanvas = !videoQuality && !useModernTransitions;
 
-if (useAlternateRenderMethod) {
+if (autoAlternateRenderMethod) {
+    logPlayback("auto alternate render fallback enabled", {
+        numDisplays: electron.store.get("numDisplays") ?? 1
+    });
+}
+
+function enableVideoElementRendering() {
+    $('#video').css('display', '');
+    $('#video2').css('display', '');
+    $('#canvasVideo').hide();
+}
+
+if (!shouldRenderWithCanvas) {
+    playbackMetrics.renderMode = "video-elements";
+    enableVideoElementRendering();
+} else if (useAlternateRenderMethod) {
+    playbackMetrics.renderMode = forceAlternateRenderMethod ? "alternate-raf-forced" : "alternate-raf-auto";
     function getAnimationFrame(start) {
         let time = start;
         const fns = drawVideoRequests.slice();
@@ -892,22 +915,11 @@ if (useAlternateRenderMethod) {
         return drawVideoRequests.length - 1;
     }
 
-    if (videoQuality || useModernTransitions) {
-        $('#video').css('display', '');
-        $('#video2').css('display', '');
-        $('#canvasVideo').hide();
-    } else {
-        getAnimationFrame(performance.now());
-        drawVideo(16);
-    }
+    getAnimationFrame(performance.now());
+    drawVideo(16);
 } else {
-    if (videoQuality || useModernTransitions) {
-        $('#video').css('display', '');
-        $('#video2').css('display', '');
-        $('#canvasVideo').hide();
-    } else {
-        drawVideo(16);
-    }
+    playbackMetrics.renderMode = "native-raf";
+    drawVideo(16);
 }
 
 function runClock(position, line, timeString) {
@@ -916,34 +928,6 @@ function runClock(position, line, timeString) {
     }
     $(`#${position}-${line}-clock`).text(moment().format(timeString));
     displayText[position][line].clockTimeout = setTimeout(runClock, 1000 - new Date().getMilliseconds(), position, line, timeString);
-}
-
-const FONT_SIZE_UNITS = new Set(["vw", "vh", "vmin", "vmax", "rem", "em", "px", "%"]);
-
-function normalizeFontSizeUnit(unit, fallbackUnit = "vw") {
-    const normalizedFallback = String(fallbackUnit ?? "vw").trim().toLowerCase();
-    const normalizedUnit = String(unit ?? "").trim().toLowerCase();
-    if (FONT_SIZE_UNITS.has(normalizedUnit)) {
-        return normalizedUnit;
-    }
-    if (FONT_SIZE_UNITS.has(normalizedFallback)) {
-        return normalizedFallback;
-    }
-    return "vw";
-}
-
-function normalizeFontSizeValue(value, fallbackValue = 2) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) {
-        return parsed;
-    }
-    return fallbackValue;
-}
-
-function getFontSizeCssValue(size, unit, fallbackSize = 2, fallbackUnit = "vw") {
-    const normalizedUnit = normalizeFontSizeUnit(unit, fallbackUnit);
-    const normalizedSize = normalizeFontSizeValue(size, fallbackSize);
-    return `${normalizedSize}${normalizedUnit}`;
 }
 
 //set up css

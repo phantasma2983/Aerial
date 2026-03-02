@@ -1,0 +1,11 @@
+{
+  "targets": [
+    "app.js",
+    "preload.js",
+    "shared/video-utils.js",
+    "shared/text-utils.js",
+    "web/config.js",
+    "web/screensaver.js",
+    "web/video-info.js"
+  ]
+}
