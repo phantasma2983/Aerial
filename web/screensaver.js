@@ -2,6 +2,7 @@ const videos = electron.videos;
 const allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
 let customVideos = electron.store.get("customVideos");
+const {getVideoSource} = electron.videoUtils;
 let currentlyPlaying = '';
 let transitionTimeout;
 let poiTimeout = [];
@@ -21,6 +22,23 @@ let initialTextFadeStarted = false;
 let initialTextFadeFallbackTimeout = null;
 const opacityAnimationState = new WeakMap();
 const debugPlayback = electron.store.get("debugPlayback") ?? false;
+const playbackMetrics = {
+    transitionRequests: 0,
+    transitionStarts: 0,
+    transitionCompletes: 0,
+    transitionFailures: 0,
+    transitionStartLatencyMs: 0,
+    transitionDurationMs: 0,
+    prebufferWaitMs: 0,
+    droppedFrameEstimate: 0,
+    frameTimes: [],
+    selectedSource: "",
+    selectedVideoId: ""
+};
+let metricsOverlay = null;
+let metricsOverlayInterval = null;
+let activeTransitionStartedAt = 0;
+let pendingTransitionRequestedAt = 0;
 
 function getTextTransitionDurationMs(setting, fallbackMs) {
     const parsed = Number(electron.store.get(setting));
@@ -51,6 +69,60 @@ function logPlayback(message, details) {
         suffix = typeof details === "string" ? ` ${details}` : ` ${JSON.stringify(details)}`;
     }
     electron.ipcRenderer.send('consoleLog', `[playback][screen ${screenNumber ?? "?"}] ${message}${suffix}`);
+}
+
+function ensureMetricsOverlay() {
+    if (!debugPlayback || metricsOverlay) {
+        return;
+    }
+    metricsOverlay = document.createElement("div");
+    metricsOverlay.id = "playbackMetricsOverlay";
+    metricsOverlay.style.cssText = "position:fixed;top:12px;left:12px;z-index:99999;background:rgba(0,0,0,.55);color:#d8f4d8;padding:8px 10px;font:12px/1.4 monospace;border-radius:6px;pointer-events:none;max-width:42vw;white-space:pre-wrap";
+    document.body.appendChild(metricsOverlay);
+    metricsOverlayInterval = setInterval(renderMetricsOverlay, 1000);
+    renderMetricsOverlay();
+}
+
+function renderMetricsOverlay() {
+    if (!debugPlayback || !metricsOverlay) {
+        return;
+    }
+    const times = playbackMetrics.frameTimes;
+    const avg = times.length ? (times.reduce((a, b) => a + b, 0) / times.length).toFixed(2) : "0.00";
+    const sorted = [...times].sort((a, b) => a - b);
+    const p95 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))].toFixed(2) : "0.00";
+    metricsOverlay.textContent = [
+        `video: ${playbackMetrics.selectedVideoId || "-"}`,
+        `source: ${playbackMetrics.selectedSource || "-"}`,
+        `transition req/start/done/fail: ${playbackMetrics.transitionRequests}/${playbackMetrics.transitionStarts}/${playbackMetrics.transitionCompletes}/${playbackMetrics.transitionFailures}`,
+        `latency ms: ${Math.round(playbackMetrics.transitionStartLatencyMs)} | transition ms: ${Math.round(playbackMetrics.transitionDurationMs)} | prebuffer ms: ${Math.round(playbackMetrics.prebufferWaitMs)}`,
+        `frame avg/p95 ms: ${avg}/${p95} | dropped(est): ${playbackMetrics.droppedFrameEstimate}`
+    ].join("\n");
+}
+
+function detectSourceProfile(videoInfo, sourceUrl) {
+    if (!videoInfo || !videoInfo.src || !sourceUrl) {
+        return "";
+    }
+    for (const [profile, url] of Object.entries(videoInfo.src)) {
+        if (url === sourceUrl) {
+            return profile;
+        }
+    }
+    return "custom";
+}
+
+function trackFrameDelta(deltaMs) {
+    if (!Number.isFinite(deltaMs)) {
+        return;
+    }
+    playbackMetrics.frameTimes.push(deltaMs);
+    if (playbackMetrics.frameTimes.length > 180) {
+        playbackMetrics.frameTimes.shift();
+    }
+    if (deltaMs > 40) {
+        playbackMetrics.droppedFrameEstimate++;
+    }
 }
 
 function quitApp() {
@@ -103,33 +175,6 @@ function videoError(event) {
     }
 }
 
-function getVideoSource(videoInfo) {
-    if (!videoInfo || !videoInfo.src) {
-        return undefined;
-    }
-    const preferredType = electron.store.get('videoFileType');
-    const aliases = {
-        H2651080p: "HEVC1080p",
-        H2654k: "HEVC2160p"
-    };
-    const resolvedPreferredType = aliases[preferredType] ?? preferredType;
-    if (videoInfo.src[resolvedPreferredType]) {
-        return videoInfo.src[resolvedPreferredType];
-    }
-    const fallbackOrder = ["H2641080p", "HEVC1080p", "HEVC2160p"];
-    for (const type of fallbackOrder) {
-        if (videoInfo.src[type]) {
-            return videoInfo.src[type];
-        }
-    }
-    for (const value of Object.values(videoInfo.src)) {
-        if (typeof value === "string" && value.length > 0) {
-            return value;
-        }
-    }
-    return undefined;
-}
-
 function prepVideo(videoContainer, direction, callback) {
     if (blackScreen) {
         if (callback) {
@@ -174,7 +219,7 @@ function prepVideo(videoContainer, direction, callback) {
             }
             videoInfo = videos[index];
             downloadedVideos = electron.store.get("downloadedVideos");
-            videoSRC = getVideoSource(videoInfo);
+            videoSRC = getVideoSource(videoInfo, electron.store.get('videoFileType'));
             if (downloadedVideos.includes(videoInfo.id)) {
                 videoSRC = `${electron.store.get('cachePath')}/${videoInfo.id}.mov`;
             }
@@ -188,6 +233,8 @@ function prepVideo(videoContainer, direction, callback) {
         //load video in video player
         containers[videoContainer].videoId = id;
         containers[videoContainer].src = videoSRC;
+        playbackMetrics.selectedVideoId = id;
+        playbackMetrics.selectedSource = detectSourceProfile(videoInfo, videoSRC);
         containers[videoContainer].playbackRate = Number(electron.store.get('playbackSpeed'));
         containers[videoContainer].pause();
 
@@ -230,6 +277,8 @@ function completeVideoChange() {
 
 function newVideo(direction = "next") {
     clearTimeout(nextVideoTimeout);
+    playbackMetrics.transitionRequests++;
+    pendingTransitionRequestedAt = performance.now();
     if (videoChangeInProgress) {
         queuedDirection = direction;
         logPlayback("newVideo queued", {direction});
@@ -240,6 +289,7 @@ function newVideo(direction = "next") {
     logPlayback("newVideo requested", {currentPlayer, prePlayer: targetPlayer});
     prepVideo(targetPlayer, direction, (prepared) => {
         if (!prepared) {
+            playbackMetrics.transitionFailures++;
             logPlayback("newVideo prep failed", {targetPlayer});
             completeVideoChange();
             return;
@@ -256,6 +306,10 @@ function newVideo(direction = "next") {
                 logPlayback("stale onCanPlay ignored", {targetPlayer, currentPlayer, prePlayer});
                 return;
             }
+            playbackMetrics.transitionStarts++;
+            playbackMetrics.prebufferWaitMs = performance.now() - pendingTransitionRequestedAt;
+            playbackMetrics.transitionStartLatencyMs = playbackMetrics.prebufferWaitMs;
+            activeTransitionStartedAt = performance.now();
             logPlayback("starting transition", {
                 targetPlayer,
                 currentPlayer,
@@ -310,6 +364,11 @@ function switchVideoContainers() {
     transitionPercent = 1;
     prePlayer = temp;
     logPlayback("switchVideoContainers after", {currentPlayer, prePlayer});
+    playbackMetrics.transitionCompletes++;
+    if (activeTransitionStartedAt > 0) {
+        playbackMetrics.transitionDurationMs = performance.now() - activeTransitionStartedAt;
+        activeTransitionStartedAt = 0;
+    }
     if (onTransitionComplete) {
         const callback = onTransitionComplete;
         onTransitionComplete = null;
@@ -570,7 +629,8 @@ let transitionSettings = {
 };
 
 //put the video on the canvas
-function drawVideo() {
+function drawVideo(dt) {
+    trackFrameDelta(Number(dt));
     ctx1.reset();
     ctx1.filter = filterString;
     ctx1.globalCompositeOperation = "source-over";
@@ -807,7 +867,7 @@ if (useAlternateRenderMethod) {
         $('#canvasVideo').hide();
     } else {
         getAnimationFrame(performance.now());
-        drawVideo();
+        drawVideo(16);
     }
 } else {
     if (videoQuality || useModernTransitions) {
@@ -815,7 +875,7 @@ if (useAlternateRenderMethod) {
         $('#video2').css('display', '');
         $('#canvasVideo').hide();
     } else {
-        drawVideo();
+        drawVideo(16);
     }
 }
 
@@ -1151,10 +1211,19 @@ function randomInt(min, max) {
 }
 
 initializeTextOverlay();
+ensureMetricsOverlay();
 document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+        clearTimeout(nextVideoTimeout);
+        clearTimeout(videoWaitingTimeout);
+        return;
+    }
     if (!textVisibilitySignaled && document.visibilityState === "visible") {
         textVisibilitySignaled = true;
         startInitialTextFadeIfReady();
+    }
+    if (!videoChangeInProgress && !blackScreen) {
+        scheduleNextVideo();
     }
 });
 
@@ -1179,6 +1248,7 @@ electron.ipcRenderer.on('screenNumber', (number) => {
     screenNumber = number;
     if (!textOverlayInitialized) {
         initializeTextOverlay();
+        ensureMetricsOverlay();
         return;
     }
     renderText();

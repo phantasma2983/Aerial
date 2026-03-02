@@ -1,6 +1,7 @@
 //Global variables
 //This list of allowed or 'checked' videos
 const bundledVideos = electron.bundledVideos ?? electron.videos;
+const {getVideoSource, sanitizeExtraVideo} = electron.videoUtils;
 let videos = electron.store.get("videoCatalog") ?? electron.videos;
 let allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
@@ -127,37 +128,6 @@ function bindAboutLinks() {
     }
 }
 
-function getVideoSource(videoInfo) {
-    if (!videoInfo || !videoInfo.src) {
-        return undefined;
-    }
-    const preferredType = electron.store.get('videoFileType');
-    const aliases = {
-        H2651080p: "HEVC1080p",
-        H2654k: "HEVC2160p",
-        HEVC1080p: "H2651080p",
-        HEVC2160p: "H2654k"
-    };
-    const preferredCandidates = [preferredType, aliases[preferredType]].filter(Boolean);
-    for (const preferredCandidate of preferredCandidates) {
-        if (videoInfo.src[preferredCandidate]) {
-            return videoInfo.src[preferredCandidate];
-        }
-    }
-    const fallbackOrder = ["H2641080p", "HEVC1080p", "H2651080p", "HEVC2160p", "H2654k"];
-    for (const type of fallbackOrder) {
-        if (videoInfo.src[type]) {
-            return videoInfo.src[type];
-        }
-    }
-    for (const value of Object.values(videoInfo.src)) {
-        if (typeof value === "string" && value.length > 0) {
-            return value;
-        }
-    }
-    return undefined;
-}
-
 function showJsonVideoEditor() {
     const template = {
         id: "example-video-id",
@@ -171,37 +141,6 @@ function showJsonVideoEditor() {
     };
     $('#jsonVideoInput').val(JSON.stringify(template, null, 2));
     document.getElementById('addJsonVideo').style.display = 'block';
-}
-
-function sanitizeExtraVideo(video) {
-    if (!video || typeof video !== "object") {
-        return null;
-    }
-    if (typeof video.id !== "string" || video.id.trim().length === 0 || video.id.startsWith("_")) {
-        return null;
-    }
-    if (!video.src || typeof video.src !== "object") {
-        return null;
-    }
-    const src = {};
-    Object.keys(video.src).forEach((key) => {
-        if (typeof video.src[key] === "string" && video.src[key].trim().length > 0) {
-            src[key] = video.src[key].trim();
-        }
-    });
-    if (Object.keys(src).length === 0) {
-        return null;
-    }
-    return {
-        ...video,
-        id: video.id.trim(),
-        name: video.name ? String(video.name).trim() : undefined,
-        accessibilityLabel: video.accessibilityLabel ? String(video.accessibilityLabel).trim() : (video.name ? String(video.name).trim() : video.id.trim()),
-        type: video.type ? String(video.type).trim() : "landscape",
-        timeOfDay: video.timeOfDay ? String(video.timeOfDay).trim() : "none",
-        src,
-        userAdded: true
-    };
 }
 
 function saveJsonVideoFromModal() {

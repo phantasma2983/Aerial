@@ -1,5 +1,5 @@
 <p align="center">  
-    <img alt="" src="/images/surface_preview.gif" />
+    <img alt="" src="/assets/images/surface_preview.gif" />
 </p>
 <p align="center">
     <img alt="" src="https://img.shields.io/badge/platform-Windows-blue?style=flat-square" />

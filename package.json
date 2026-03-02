@@ -7,7 +7,8 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder",
-    "build": "electron-builder build"
+    "build": "electron-builder build",
+    "lint": "node --check app.js && node --check preload.js && node --check shared/video-utils.js && node --check web/config.js && node --check web/screensaver.js && node --check web/video-info.js"
   },
   "repository": {
     "type": "git",
@@ -20,15 +21,15 @@
   },
   "homepage": "https://github.com/phantasma2983/Aerial#readme",
   "devDependencies": {
-    "electron": "^22.2.0",
-    "electron-builder": "^24.0.0"
+    "electron": "^28.3.3",
+    "electron-builder": "^24.13.3"
   },
   "dependencies": {
-    "auto-launch": "*",
-    "electron-store": "*",
-    "font-list-universal": "*",
-    "json-beautify": "*",
-    "suncalc": "*"
+    "auto-launch": "~5.0.6",
+    "electron-store": "~11.0.2",
+    "font-list-universal": "~1.0.0",
+    "json-beautify": "~1.1.1",
+    "suncalc": "~1.9.0"
   },
   "build": {
     "win": {
@@ -44,8 +45,7 @@
       "useZip": true
     },
     "files": [
-      "!documentation/*",
-      "!images/*"
+      "!assets/images/**"
     ],
     "icon": "icon.ico",
     "productName": "Aerial"
