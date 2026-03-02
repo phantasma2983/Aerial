@@ -397,7 +397,8 @@ function createSSWindow(argv) {
     let displays = screen.getAllDisplays();
     store.set('numDisplays', displays.length);
     for (let i = 0; i < displays.length; i++) {
-        const renderScreensaver = !(store.get("onlyShowVideoOnPrimaryMonitor") && displays[i].id !== screen.getPrimaryDisplay().id);
+        const displayId = displays[i].id;
+        const renderScreensaver = !(store.get("onlyShowVideoOnPrimaryMonitor") && displayId !== screen.getPrimaryDisplay().id);
         let win = new BrowserWindow({
             width: displays[i].size.width,
             height: displays[i].size.height,
@@ -426,8 +427,16 @@ function createSSWindow(argv) {
             });
         }
         win.on('closed', function () {
+            const closedIndex = screens.indexOf(win);
+            if (closedIndex !== -1) {
+                screens.splice(closedIndex, 1);
+            }
+            const screenIdIndex = screenIds.indexOf(displayId);
+            if (screenIdIndex !== -1) {
+                screenIds.splice(screenIdIndex, 1);
+            }
             logLifecycle("createSSWindow:window-closed", {
-                displayId: displays[i].id,
+                displayId,
                 remainingTrackedScreens: screens.length
             });
             win = null;
@@ -445,7 +454,7 @@ function createSSWindow(argv) {
             win.frame = true;
         }
         screens.push(win);
-        screenIds.push(displays[i].id);
+        screenIds.push(displayId);
     }
     //find the screen the cursor is on and focus it so the cursor will hide
     let mainScreen = screens[screenIds.indexOf(screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).id)];
@@ -562,6 +571,11 @@ function createTrayWindow() {
     trayWindow.on("closed", () => {
         logLifecycle("trayWindow:closed");
         trayWindow = null;
+        if (!isAppQuitting && store.get('useTray')) {
+            setTimeout(() => {
+                createTrayWindow();
+            }, 0);
+        }
     });
 
     function newMenu(isSuspendChecked) {
@@ -1512,6 +1526,12 @@ function quitApp() {
         exitingScreensaverWindows = true;
         logLifecycle("quitApp:closeAllWindows");
         closeAllWindows();
+        if (store.get('useTray') && !launchedAsScreensaverSession) {
+            createTrayWindow();
+            setTimeout(() => {
+                createTrayWindow();
+            }, 200);
+        }
         setTimeout(() => {
             exitingScreensaverWindows = false;
             logLifecycle("quitApp:exitingScreensaverWindows-reset");
@@ -1523,12 +1543,14 @@ function quitApp() {
 
 function closeAllWindows() {
     logLifecycle("closeAllWindows:start", {trackedScreens: screens.length});
-    for (let i = 0; i < screens.length; i++) {
-        if (!screens[i].isDestroyed()) {
-            screens[i].close();
+    const windowsToClose = [...screens];
+    for (let i = 0; i < windowsToClose.length; i++) {
+        if (!windowsToClose[i].isDestroyed()) {
+            windowsToClose[i].close();
         }
     }
     screens = [];
+    screenIds = [];
     logLifecycle("closeAllWindows:done");
 }
 
