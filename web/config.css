@@ -715,6 +715,8 @@ input[type="radio"] {
 
 .positionLayout {
     padding: 18px 18px 14px;
+    max-width: 1220px;
+    margin: 0 auto;
 }
 
 .positionTopBar {
@@ -755,18 +757,21 @@ input[type="radio"] {
 
 .positionWorkspace {
     display: grid;
-    grid-template-columns: minmax(340px, 1fr) minmax(300px, 430px);
+    grid-template-columns: minmax(320px, 720px) minmax(300px, 430px);
     gap: 18px;
     align-items: start;
+    justify-content: space-between;
 }
 
 .positionPreviewPane {
     width: 100%;
+    max-width: 720px;
     margin: 0;
 }
 
 .positionControlsPane {
     width: 100%;
+    max-width: 430px;
     margin: 0;
     text-align: left !important;
     align-self: start;
@@ -781,6 +786,28 @@ input[type="radio"] {
 
 .positionTypePanel .w3-table-all {
     margin-top: 0;
+}
+
+.positionLineRow {
+    cursor: pointer;
+    transition: background-color var(--speed) ease;
+}
+
+.positionLineRow:hover td {
+    background: var(--accent-soft) !important;
+}
+
+.positionLineRowActive td {
+    background: var(--accent-soft) !important;
+}
+
+.positionLineRowActive td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.positionLineLabelActive {
+    color: var(--accent);
+    font-weight: 700;
 }
 
 .positionTypePanel td {
@@ -811,21 +838,44 @@ input[type="radio"] {
     padding: 14px;
 }
 
-.positionField {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+.formGrid {
+    --label-width: 220px;
+    display: grid;
+    gap: 10px;
 }
 
-.positionInlineRow {
+.formRow {
+    display: grid;
+    grid-template-columns: var(--label-width) minmax(220px, 1fr);
+    gap: 14px;
+    align-items: center;
+}
+
+.formRowFull {
+    grid-template-columns: 1fr;
+}
+
+.formRowFull > hr {
+    width: 100%;
+    margin: 10px 0;
+}
+
+.formLabel {
+    margin: 0;
+    font-weight: 600;
+    text-align: left;
+}
+
+.formControl {
     display: flex;
     align-items: center;
     gap: 10px;
     flex-wrap: wrap;
+    min-width: 0;
 }
 
 .positionMetaText {
-    margin: 10px 0 6px;
+    margin: 0;
 }
 
 .positionInputMedium {
@@ -843,26 +893,18 @@ input[type="radio"] {
 }
 
 .positionPreviewValue {
-    margin-top: 2px;
+    margin: 0;
     color: var(--text-muted);
     font-size: 1.05rem;
     letter-spacing: 0.2px;
 }
 
 .positionHelpAction {
-    margin-top: 12px;
+    margin-top: 0;
 }
 
 .positionDetailsDivider {
-    margin: 14px 0 12px;
-}
-
-.positionFooterRow {
-    display: flex;
-    align-items: flex-end;
-    justify-content: space-between;
-    gap: 14px;
-    flex-wrap: wrap;
+    margin: 12px 0;
 }
 
 .positionCheckboxRow {
@@ -881,22 +923,25 @@ input[type="radio"] {
     height: 20px;
 }
 
-.positionCustomCssRow {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    margin-left: auto;
-}
-
-.positionFontControls {
-    margin-top: 12px;
+.textOptionsPanel {
     display: grid;
-    gap: 10px;
+    gap: 12px;
 }
 
-.positionFontAutocomplete {
-    width: min(360px, 100%);
+.textOptionInputWide {
+    width: min(420px, 100%);
+}
+
+.textOptionInputSmall {
+    width: min(180px, 100%);
+}
+
+.textOptionInputTiny {
+    width: min(110px, 100%);
+}
+
+.textOpacitySlider {
+    width: min(260px, 100%) !important;
 }
 
 .positionColorInput {
@@ -992,14 +1037,18 @@ input[type="radio"] {
         grid-template-columns: 1fr;
     }
 
+    .positionPreviewPane,
+    .positionControlsPane {
+        max-width: none;
+    }
+
     .positionControlsPane {
         max-height: none;
         overflow-y: visible;
     }
 
-    .positionCustomCssRow {
-        margin-left: 0;
-        width: 100%;
+    .formGrid {
+        --label-width: 180px;
     }
 }
 

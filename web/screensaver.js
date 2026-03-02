@@ -14,7 +14,33 @@ let nextVideoTimeout;
 let videoChangeInProgress = false;
 let queuedDirection = null;
 let onTransitionComplete = null;
+let textTransitionTimeout = null;
+let randomTextTransitionInProgress = false;
+let textVisibilitySignaled = false;
+let initialTextFadeStarted = false;
+let initialTextFadeFallbackTimeout = null;
+const opacityAnimationState = new WeakMap();
 const debugPlayback = electron.store.get("debugPlayback") ?? false;
+
+function getTextTransitionDurationMs(setting, fallbackMs) {
+    const parsed = Number(electron.store.get(setting));
+    if (!Number.isFinite(parsed)) {
+        return fallbackMs;
+    }
+    return Math.max(0, Math.min(10000, parsed));
+}
+
+function normalizeOpacity(value, fallback = 1) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+    return Math.min(1, Math.max(0, parsed));
+}
+
+const textFadeInDuration = getTextTransitionDurationMs("textFadeInDuration", 650);
+const textFadeOutDuration = getTextTransitionDurationMs("textFadeOutDuration", 260);
+const globalDefaultTextOpacity = normalizeOpacity(electron.store.get("textOpacity"), 1);
 
 function logPlayback(message, details) {
     if (!debugPlayback) {
@@ -394,9 +420,82 @@ function fadeVideoOut(time) {
 
 function fadeTextOut(time) {
     if (time > 0) {
-        transitionTimeout = setTimeout(fadeTextOut, 16, time - 16);
+        textTransitionTimeout = setTimeout(fadeTextOut, 16, time - 16);
     }
     $('#textDisplayArea').css('opacity', time / transitionLength);
+}
+
+function getElementOpacity(element, fallback = 1) {
+    if (!element) {
+        return fallback;
+    }
+    const inlineOpacity = Number(element.style.opacity);
+    if (Number.isFinite(inlineOpacity)) {
+        return inlineOpacity;
+    }
+    const computedOpacity = Number(window.getComputedStyle(element).opacity);
+    if (Number.isFinite(computedOpacity)) {
+        return computedOpacity;
+    }
+    return fallback;
+}
+
+function stopOpacityAnimation(element) {
+    if (!element) {
+        return;
+    }
+    const current = opacityAnimationState.get(element);
+    if (current) {
+        cancelAnimationFrame(current.rafId);
+        opacityAnimationState.delete(element);
+    }
+}
+
+function animateOpacity(element, from, to, duration, onComplete) {
+    if (!element) {
+        if (onComplete) {
+            onComplete();
+        }
+        return;
+    }
+    const safeFrom = normalizeOpacity(from, 1);
+    const safeTo = normalizeOpacity(to, 1);
+    const safeDuration = Math.max(0, Number(duration) || 0);
+
+    stopOpacityAnimation(element);
+    element.style.opacity = String(safeFrom);
+    if (safeDuration === 0 || safeFrom === safeTo) {
+        element.style.opacity = String(safeTo);
+        if (onComplete) {
+            onComplete();
+        }
+        return;
+    }
+
+    const startTime = performance.now();
+    const step = (now) => {
+        const progress = Math.min(1, (now - startTime) / safeDuration);
+        const value = safeFrom + ((safeTo - safeFrom) * progress);
+        element.style.opacity = String(value);
+        if (progress >= 1) {
+            opacityAnimationState.delete(element);
+            if (onComplete) {
+                onComplete();
+            }
+            return;
+        }
+        const rafId = requestAnimationFrame(step);
+        opacityAnimationState.set(element, {rafId});
+    };
+
+    const rafId = requestAnimationFrame(step);
+    opacityAnimationState.set(element, {rafId});
+}
+
+function fadeInTextOverlay(duration = textFadeInDuration) {
+    const overlay = document.getElementById("textDisplayArea");
+    clearTimeout(textTransitionTimeout);
+    animateOpacity(overlay, 0, 1, duration);
 }
 
 function fadeVideoIn(time) {
@@ -728,20 +827,57 @@ function runClock(position, line, timeString) {
     displayText[position][line].clockTimeout = setTimeout(runClock, 1000 - new Date().getMilliseconds(), position, line, timeString);
 }
 
+const FONT_SIZE_UNITS = new Set(["vw", "vh", "vmin", "vmax", "rem", "em", "px", "%"]);
+
+function normalizeFontSizeUnit(unit, fallbackUnit = "vw") {
+    const normalizedFallback = String(fallbackUnit ?? "vw").trim().toLowerCase();
+    const normalizedUnit = String(unit ?? "").trim().toLowerCase();
+    if (FONT_SIZE_UNITS.has(normalizedUnit)) {
+        return normalizedUnit;
+    }
+    if (FONT_SIZE_UNITS.has(normalizedFallback)) {
+        return normalizedFallback;
+    }
+    return "vw";
+}
+
+function normalizeFontSizeValue(value, fallbackValue = 2) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+        return parsed;
+    }
+    return fallbackValue;
+}
+
+function getFontSizeCssValue(size, unit, fallbackSize = 2, fallbackUnit = "vw") {
+    const normalizedUnit = normalizeFontSizeUnit(unit, fallbackUnit);
+    const normalizedSize = normalizeFontSizeValue(size, fallbackSize);
+    return `${normalizedSize}${normalizedUnit}`;
+}
+
 //set up css
+const globalFontSize = getFontSizeCssValue(
+    electron.store.get('textSize'),
+    electron.store.get('textSizeUnit'),
+    2,
+    "vw"
+);
 $('.displayText')
     .css('font-family', `"${electron.store.get('textFont')}"`)
-    .css('font-size', `${electron.store.get('textSize')}vw`)
+    .css('font-size', globalFontSize)
     .css('color', `${electron.store.get('textColor')}`)
     .css('line-height', `${electron.store.get('textLineHeight')}`)
     .css('font-weight', `${electron.store.get('textFontWeight')}`);
+$('#textDisplayArea').css('opacity', 0);
 
 //draw text
 let displayText = electron.store.get('displayText') ?? [];
 let html = "";
+let textOverlayInitialized = false;
 
 function renderText() {
 //create content divs
+    html = "";
     for (let position of displayText.positionList) {
         let align = "";
         if (position.includes("left")) {
@@ -760,6 +896,89 @@ function renderText() {
             displayTextPosition(position);
         }
     }
+}
+
+function initializeTextOverlay() {
+    if (textOverlayInitialized) {
+        return;
+    }
+    renderText();
+    const overlay = document.getElementById("textDisplayArea");
+    if (overlay) {
+        overlay.style.opacity = "0";
+    }
+    textOverlayInitialized = true;
+    if (document.visibilityState === "visible") {
+        textVisibilitySignaled = true;
+    }
+    startInitialTextFadeIfReady();
+    scheduleInitialTextFadeFallback();
+}
+
+function startInitialTextFadeIfReady() {
+    if (!textOverlayInitialized || !textVisibilitySignaled || initialTextFadeStarted) {
+        return;
+    }
+    initialTextFadeStarted = true;
+    if (initialTextFadeFallbackTimeout) {
+        clearTimeout(initialTextFadeFallbackTimeout);
+        initialTextFadeFallbackTimeout = null;
+    }
+    fadeInTextOverlay();
+}
+
+function scheduleInitialTextFadeFallback() {
+    if (initialTextFadeFallbackTimeout) {
+        clearTimeout(initialTextFadeFallbackTimeout);
+    }
+    // Safety net: in case visibility/ipc events are missed, still show text.
+    initialTextFadeFallbackTimeout = setTimeout(() => {
+        if (initialTextFadeStarted) {
+            return;
+        }
+        textVisibilitySignaled = true;
+        startInitialTextFadeIfReady();
+    }, 1500);
+}
+
+function applyRandomTextAtPosition(targetPosition, onComplete) {
+    const targetSelector = $(`#textDisplay-${targetPosition}`);
+    const targetElement = targetSelector[0];
+    if (!targetElement) {
+        if (onComplete) {
+            onComplete();
+        }
+        return;
+    }
+    stopOpacityAnimation(targetElement);
+    targetElement.style.opacity = "0";
+    displayTextPosition("random", targetPosition);
+    displayText.random.currentLocation = targetPosition;
+    animateOpacity(targetElement, 0, 1, textFadeInDuration, onComplete);
+}
+
+function fadeSwitchRandomText(nextPosition) {
+    if (randomTextTransitionInProgress) {
+        return;
+    }
+    randomTextTransitionInProgress = true;
+    const currentPosition = displayText.random.currentLocation;
+    if (!currentPosition || currentPosition === "none") {
+        applyRandomTextAtPosition(nextPosition, () => {
+            randomTextTransitionInProgress = false;
+        });
+        return;
+    }
+
+    const currentSelector = $(`#textDisplay-${currentPosition}`);
+    const currentElement = currentSelector[0];
+    const currentOpacity = getElementOpacity(currentElement, 1);
+    animateOpacity(currentElement, currentOpacity, 0, textFadeOutDuration, () => {
+        currentSelector.html("");
+        applyRandomTextAtPosition(nextPosition, () => {
+            randomTextTransitionInProgress = false;
+        });
+    });
 }
 
 function getPositionMaxWidth(position) {
@@ -790,14 +1009,36 @@ function displayTextPosition(position, displayLocation) {
     $(selector).css('width', 'auto');
     $(selector).css('max-width', getPositionMaxWidth(position));
     for (let i = 0; i < displayText[position].length; i++) {
-        if (displayText[position][i].onlyShowOnScreen === undefined || Number(displayText[position][i].onlyShowOnScreen) === Number(screenNumber)) {
+        if (displayText[position][i].onlyShowOnScreen === undefined || screenNumber === null || Number(displayText[position][i].onlyShowOnScreen) === Number(screenNumber)) {
             html += `<div id="${position}-${i}" style="${displayText[position][i].customCSS}">${createContentLine(displayText[position][i], position, i)}</div>`;
         }
     }
     $(selector).html(html);
     for (let i = 0; i < displayText[position].length; i++) {
-        if (!displayText[position][i].defaultFont) {
-            $(`#${position}-${i}`).css('font-family', `"${displayText[position][i].font}"`).css('font-size', `${displayText[position][i].fontSize}vw`).css('color', `${displayText[position][i].fontColor}`);
+        const lineSettings = displayText[position][i];
+        const lineElement = $(`#${position}-${i}`);
+        if (lineElement.length === 0) {
+            continue;
+        }
+        const lineOpacity = lineSettings.defaultFont
+            ? globalDefaultTextOpacity
+            : normalizeOpacity(lineSettings.opacity, globalDefaultTextOpacity);
+        lineElement.css('opacity', `${lineOpacity}`);
+        if (!lineSettings.defaultFont) {
+            const lineFontSize = getFontSizeCssValue(
+                lineSettings.fontSize,
+                lineSettings.fontSizeUnit,
+                normalizeFontSizeValue(electron.store.get('textSize'), 2),
+                normalizeFontSizeUnit(electron.store.get('textSizeUnit'), "vw")
+            );
+            const lineFontFamily = lineSettings.font || electron.store.get('textFont');
+            const lineFontColor = lineSettings.fontColor || electron.store.get('textColor');
+            const lineFontWeight = lineSettings.fontWeight || electron.store.get('textFontWeight');
+            lineElement
+                .css('font-family', `"${lineFontFamily}"`)
+                .css('font-size', lineFontSize)
+                .css('color', `${lineFontColor}`)
+                .css('font-weight', `${lineFontWeight}`);
         }
     }
 }
@@ -876,9 +1117,13 @@ if (random) {
 }
 
 function switchRandomText() {
+    if (randomTextTransitionInProgress) {
+        return;
+    }
     let newLoc = false;
     let c = 0;
     do {
+        c++;
         if (c > 100) {
             console.error("random overload - nowhere to go");
             break;
@@ -897,16 +1142,21 @@ function switchRandomText() {
         if (displayText.random[0].type === "time" && displayText.random.currentLocation !== "none") {
             clearTimeout(displayText[displayText.random.currentLocation].clockTimeout);
         }
-        $(`#textDisplay-${displayText.random.currentLocation}`).html("");
-        displayText.random.currentLocation = newLoc;
-        displayTextPosition("random", newLoc);
-        c++;
+        fadeSwitchRandomText(newLoc);
     } while (!newLoc);
 }
 
 function randomInt(min, max) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
+
+initializeTextOverlay();
+document.addEventListener("visibilitychange", () => {
+    if (!textVisibilitySignaled && document.visibilityState === "visible") {
+        textVisibilitySignaled = true;
+        startInitialTextFadeIfReady();
+    }
+});
 
 //play a video
 newVideo();
@@ -927,5 +1177,14 @@ electron.ipcRenderer.on('blankTheScreen', () => {
 
 electron.ipcRenderer.on('screenNumber', (number) => {
     screenNumber = number;
+    if (!textOverlayInitialized) {
+        initializeTextOverlay();
+        return;
+    }
     renderText();
+});
+
+electron.ipcRenderer.on('screensaverVisible', () => {
+    textVisibilitySignaled = true;
+    startInitialTextFadeIfReady();
 });

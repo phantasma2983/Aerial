@@ -43,14 +43,18 @@ function displaySettings() {
     for (let i = 0; i < checked.length; i++) {
         $(`#${checked[i]}`).prop('checked', electron.store.get(checked[i]));
     }
-    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textColor", "textLineHeight", "textFontWeight", "startAfter", "blankAfter", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "previousSkipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
+    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textSizeUnit", "textColor", "textLineHeight", "textFontWeight", "textFadeInDuration", "textFadeOutDuration", "startAfter", "blankAfter", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "previousSkipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
     for (let i = 0; i < numTxt.length; i++) {
         $(`#${numTxt[i]}`).val(electron.store.get(numTxt[i]));
     }
-    let slider = ["playbackSpeed", "videoTransitionLength"];
+    let slider = ["playbackSpeed", "videoTransitionLength", "textOpacity"];
     for (let i = 0; i < slider.length; i++) {
         $(`#${slider[i]}`).val(electron.store.get(slider[i]));
-        $(`#${slider[i]}Text`).text(electron.store.get(slider[i]));
+        if (slider[i] === "textOpacity") {
+            $(`#${slider[i]}Text`).text(normalizeOpacity(electron.store.get(slider[i]), 1).toFixed(2));
+        } else {
+            $(`#${slider[i]}Text`).text(electron.store.get(slider[i]));
+        }
     }
     let numeralText = [{'id': "videoCacheSize", 'format': "0.00 ib"}];
     for (let i = 0; i < numeralText.length; i++) {
@@ -302,12 +306,23 @@ function updateSetting(setting, type) {
             electron.store.set(setting, document.getElementById(setting).checked);
             break;
         case "slider":
+            if (setting === "textOpacity") {
+                const normalizedOpacity = normalizeOpacity(document.getElementById(setting).value, 1);
+                document.getElementById(setting).value = normalizedOpacity;
+                $(`#${setting}Text`).text(normalizedOpacity.toFixed(2));
+                electron.store.set(setting, normalizedOpacity);
+                break;
+            }
             $(`#${setting}Text`).text(document.getElementById(setting).value);
         case "number":
         case "text":
         case "select":
         case "time":
-            electron.store.set(setting, document.getElementById(setting).value);
+            if (setting === "textSizeUnit") {
+                electron.store.set(setting, normalizeTextSizeUnit(document.getElementById(setting).value));
+            } else {
+                electron.store.set(setting, document.getElementById(setting).value);
+            }
             break;
         case "filterSlider":
             $(`#${setting}Text`).text(document.getElementById(setting).value);
@@ -649,6 +664,39 @@ function escapeHtmlText(value) {
         .replace(/</g, "&lt;");
 }
 
+const TEXT_SIZE_UNITS = ["vw", "vh", "vmin", "vmax", "rem", "em", "px", "%"];
+
+function normalizeTextSizeUnit(unit) {
+    const normalized = String(unit ?? "").trim().toLowerCase();
+    if (TEXT_SIZE_UNITS.includes(normalized)) {
+        return normalized;
+    }
+    return "vw";
+}
+
+function getTextSizeUnitOptionsHtml(selectedUnit) {
+    const selected = normalizeTextSizeUnit(selectedUnit);
+    let html = "";
+    for (const unit of TEXT_SIZE_UNITS) {
+        html += `<option value="${unit}" ${unit === selected ? "selected" : ""}>${unit}</option>`;
+    }
+    return html;
+}
+
+function normalizeOpacity(value, fallback = 1) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+        return fallback;
+    }
+    if (parsed < 0) {
+        return 0;
+    }
+    if (parsed > 1) {
+        return 1;
+    }
+    return parsed;
+}
+
 function getFontOptionsHtml(selectedFont) {
     const selected = String(selectedFont ?? "");
     const optionFonts = [...fontList];
@@ -749,12 +797,12 @@ function lineSelect(position, line) {
     $('#textWidthSelect').val(maxWidth);
     $('#textWidthContainer').css('display', "inline-flex");
 
-    $('#positionLineNum0').css("font-weight", "normal");
-    $('#positionLineNum1').css("font-weight", "normal");
-    $('#positionLineNum2').css("font-weight", "normal");
-    $('#positionLineNum3').css("font-weight", "normal");
-
-    $('#positionLineNum' + line).css("font-weight", "bold");
+    for (let i = 0; i < 4; i++) {
+        $(`#positionRow${i}`).removeClass("positionLineRowActive");
+        $(`#positionLineNum${i}`).removeClass("positionLineLabelActive");
+    }
+    $(`#positionRow${line}`).addClass("positionLineRowActive");
+    $(`#positionLineNum${line}`).addClass("positionLineLabelActive");
 
     if (electron.store.get('numDisplays') > 0) {
         $('#screenSelectorDiv').css('display', "");
@@ -775,62 +823,66 @@ function updatePositionType(position, line) {
     const textEscape = (value) => String(value ?? "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;");
+    const formRow = (label, controlHtml, inputId = "") => `
+        <div class="formRow">
+            <label class="formLabel"${inputId ? ` for="${inputId}"` : ""}>${label}</label>
+            <div class="formControl">${controlHtml}</div>
+        </div>`;
+    const formDivider = () => `<div class="formRow formRowFull"><hr class="positionDetailsDivider"></div>`;
+    const helpButtonHtml = `<button onclick="document.getElementById('timeFormatExplain').style.display='block'" class="w3-button w3-white w3-border w3-border-blue w3-round-large positionHelpAction">Show Formatting Details</button>`;
     displayTextSettings[position][line].type = $('#positionTypeSelect' + line).val();
     const activeLine = displayTextSettings[position][line];
-    let html = "";
+    let formRows = "";
     switch (activeLine.type) {
         case "none":
-            html = "";
             break;
         case "text":
-            html = `<div class="positionDetailsPanel">
-                        <div class="positionField">
-                            <label for="positionTextValue">Text</label>
-                            <input id="positionTextValue" class="w3-input positionInputMedium" value="${attrEscape(activeLine.text)}" onchange="updateTextSetting(this, '${position}','${line}', 'text')">
-                        </div>
-                    </div>`;
+            formRows += formRow(
+                "Text",
+                `<input id="positionTextValue" class="w3-input positionInputMedium" value="${attrEscape(activeLine.text)}" oninput="updateTextSetting(this, '${position}','${line}', 'text')" onchange="updateTextSetting(this, '${position}','${line}', 'text')">`,
+                "positionTextValue"
+            );
             break;
         case "html":
-            html = `<div class="positionDetailsPanel">
-                        <div class="positionField">
-                            <label for="positionHtmlValue">HTML</label>
-                            <textarea id="positionHtmlValue" class="w3-input positionTextarea" onchange="updateTextSetting(this, '${position}','${line}', 'html')" rows="7">${textEscape(activeLine.html)}</textarea>
-                        </div>
-                    </div>`;
+            formRows += formRow(
+                "HTML",
+                `<textarea id="positionHtmlValue" class="w3-input positionTextarea" oninput="updateTextSetting(this, '${position}','${line}', 'html')" onchange="updateTextSetting(this, '${position}','${line}', 'html')" rows="7">${textEscape(activeLine.html)}</textarea>`,
+                "positionHtmlValue"
+            );
             break;
         case "image":
-            html = `<div class="positionDetailsPanel">
-                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="electron.ipcRenderer.send('selectFile',['image','${position}','${line}'])">Select Image</button>
-                        <p class="w3-small positionMetaText">File: <span id="imageFileName">${textEscape(activeLine.imagePath)}</span></p>
-                        <div class="positionInlineRow">
-                            <label for="positionImageWidth">Width</label>
-                            <input id="positionImageWidth" class="w3-input positionInputTiny" value="${attrEscape(activeLine.imageWidth)}" onchange="updateTextSetting(this, '${position}','${line}', 'imageWidth')">
-                        </div>
-                    </div>`;
+            formRows += formRow(
+                "Image File",
+                `<button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="electron.ipcRenderer.send('selectFile',['image','${position}','${line}'])">Select Image</button>
+                 <span class="w3-small positionMetaText">File: <span id="imageFileName">${textEscape(activeLine.imagePath)}</span></span>`
+            );
+            formRows += formRow(
+                "Image Width",
+                `<input id="positionImageWidth" class="w3-input positionInputTiny" value="${attrEscape(activeLine.imageWidth)}" oninput="updateTextSetting(this, '${position}','${line}', 'imageWidth')" onchange="updateTextSetting(this, '${position}','${line}', 'imageWidth')">`,
+                "positionImageWidth"
+            );
             break;
         case "time":
             activeLine.timeString = activeLine.timeString || "hh:mm:ss";
-            html = `<div class="positionDetailsPanel">
-                        <div class="positionField">
-                            <label for="positionTimeFormat">Time Format</label>
-                            <input id="positionTimeFormat" class="w3-input positionInputMedium" value="${attrEscape(activeLine.timeString)}" onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}','${line}', 'timeString')">
-                            <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.timeString)}</span>
-                        </div>
-                        <button onclick="document.getElementById('timeFormatExplain').style.display='block'" class="w3-button w3-white w3-border w3-border-blue w3-round-large positionHelpAction">Show Formatting Details</button>
-                    </div>`;
+            formRows += formRow(
+                "Time Format",
+                `<input id="positionTimeFormat" class="w3-input positionInputMedium" value="${attrEscape(activeLine.timeString)}" oninput="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}','${line}', 'timeString')" onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}','${line}', 'timeString')">
+                 <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.timeString)}</span>`,
+                "positionTimeFormat"
+            );
+            formRows += formRow("Format Help", helpButtonHtml);
             break;
         case "information":
             activeLine.infoType = activeLine.infoType || "accessibilityLabel";
-            html = `<div class="positionDetailsPanel">
-                        <div class="positionInlineRow">
-                            <label for="positionInfoType">Type</label>
-                            <select id="positionInfoType" class="positionInputMedium" onchange="updateTextSetting(this, '${position}', '${line}','infoType')">
+            formRows += formRow(
+                "Type",
+                `<select id="positionInfoType" class="positionInputMedium" onchange="updateTextSetting(this, '${position}', '${line}','infoType')">
                                 <option value="accessibilityLabel" ${activeLine.infoType === "accessibilityLabel" ? "selected" : ""}>Label</option>
                                 <option value="name" ${activeLine.infoType === "name" ? "selected" : ""}>Video Name</option>
                                 ${position !== "random" ? `<option value="poi" ${activeLine.infoType === "poi" ? "selected" : ""}>Location Information</option>` : ""}
-                            </select>
-                        </div>
-                    </div>`;
+                            </select>`,
+                "positionInfoType"
+            );
             break;
         case "astronomy":
             if (document.getElementById('latitude').value === "" || document.getElementById('longitude').value === "") {
@@ -841,58 +893,83 @@ function updatePositionType(position, line) {
             }
             activeLine.astronomy = activeLine.astronomy || "sunrise/set";
             activeLine.astroTimeString = activeLine.astroTimeString || "hh:mm";
-            html = `<div class="positionDetailsPanel">
-                        <div class="positionInlineRow">
-                            <label for="positionAstronomyType">Type</label>
-                            <select id="positionAstronomyType" class="positionInputMedium" onchange="updateTextSetting(this, '${position}','${line}', 'astronomy')">
+            formRows += formRow(
+                "Type",
+                `<select id="positionAstronomyType" class="positionInputMedium" onchange="updateTextSetting(this, '${position}','${line}', 'astronomy')">
                                 <option value="sunrise/set" ${activeLine.astronomy === "sunrise/set" ? "selected" : ""}>Sunrise/Sunset</option>
                                 <option value="moonrise/set" ${activeLine.astronomy === "moonrise/set" ? "selected" : ""}>Moonrise/Moonset</option>
                                 <option value="sunrise" ${activeLine.astronomy === "sunrise" ? "selected" : ""}>Sunrise</option>
                                 <option value="sunset" ${activeLine.astronomy === "sunset" ? "selected" : ""}>Sunset</option>
                                 <option value="moonrise" ${activeLine.astronomy === "moonrise" ? "selected" : ""}>Moonrise</option>
                                 <option value="moonset" ${activeLine.astronomy === "moonset" ? "selected" : ""}>Moonset</option>
-                            </select>
-                        </div>
-                        <div class="positionInlineRow">
-                            <label for="positionAstroFormat">Time Format</label>
-                            <input id="positionAstroFormat" class="w3-input positionInputTiny" value="${attrEscape(activeLine.astroTimeString)}" onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}', '${line}','astroTimeString')">
-                            <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.astroTimeString)}</span>
-                        </div>
-                        <button onclick="document.getElementById('timeFormatExplain').style.display='block'" class="w3-button w3-white w3-border w3-border-blue w3-round-large positionHelpAction">Show Formatting Details</button>
-                    </div>`;
+                            </select>`,
+                "positionAstronomyType"
+            );
+            formRows += formRow(
+                "Time Format",
+                `<input id="positionAstroFormat" class="w3-input positionInputTiny" value="${attrEscape(activeLine.astroTimeString)}" oninput="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}', '${line}','astroTimeString')" onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}', '${line}','astroTimeString')">
+                 <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.astroTimeString)}</span>`,
+                "positionAstroFormat"
+            );
+            formRows += formRow("Format Help", helpButtonHtml);
             break;
     }
     if (activeLine.type !== "none") {
-        html += `<hr class="positionDetailsDivider">
-                <div class="positionFooterRow">
-                    <label for="useDefaultFont" class="positionCheckboxRow">
-                        <input type="checkbox" class="w3-check" id="useDefaultFont" onchange="updateTextSettingCheck(this, '${position}','${line}', 'defaultFont'); updatePositionType('${position}','${line}');" ${activeLine.defaultFont ? 'checked' : ''}>
-                        <span>Use Default Font</span>
-                    </label>
-                    <div class="positionCustomCssRow">
-                        <label for="customCSS">Custom CSS</label>
-                        <input id="customCSS" class="w3-input positionInputMedium" onchange="updateTextSetting(this, '${position}','${line}', 'customCSS')" value="${attrEscape(activeLine.customCSS)}"/>
-                    </div>
-                </div>`;
+        formRows += formDivider();
+        formRows += formRow(
+            "Use Default Font",
+            `<div class="positionCheckboxRow">
+                <input type="checkbox" class="w3-check" id="useDefaultFont" onchange="updateTextSettingCheck(this, '${position}','${line}', 'defaultFont'); updatePositionType('${position}','${line}');" ${activeLine.defaultFont ? 'checked' : ''}>
+                <label for="useDefaultFont">Enabled</label>
+            </div>`,
+            "useDefaultFont"
+        );
+        formRows += formRow(
+            "Custom CSS",
+            `<input id="customCSS" class="w3-input positionInputMedium" oninput="updateTextSetting(this, '${position}','${line}', 'customCSS')" onchange="updateTextSetting(this, '${position}','${line}', 'customCSS')" value="${attrEscape(activeLine.customCSS)}"/>`,
+            "customCSS"
+        );
         if (!activeLine.defaultFont) {
             activeLine.font = activeLine.font || electron.store.get('textFont');
             activeLine.fontSize = activeLine.fontSize || electron.store.get('textSize');
+            activeLine.fontSizeUnit = normalizeTextSizeUnit(activeLine.fontSizeUnit || electron.store.get('textSizeUnit'));
             activeLine.fontColor = activeLine.fontColor || electron.store.get('textColor');
-            html += `<div class="positionFontControls">
-                        <div class="positionFontAutocomplete">
-                            <label for="positionFont">Font</label>
-                            <select id="positionFont" class="w3-input" onchange="updateTextSetting(this, '${position}','${line}', 'font')">
-                                ${getFontOptionsHtml(activeLine.font)}
-                            </select>
-                        </div>
-                        <div class="positionInlineRow">
-                            <label for="positionTextSize">Font Size</label>
-                            <input class="w3-input positionInputTiny" id="positionTextSize" type="number" step=".25" onchange="updateTextSetting(this, '${position}','${line}', 'fontSize')" value="${attrEscape(activeLine.fontSize)}">
-                            <label for="positionTextColor">Color</label>
-                            <input id="positionTextColor" class="w3-input positionColorInput" type="color" step=".25" onchange="updateTextSetting(this, '${position}','${line}', 'fontColor')" value="${attrEscape(activeLine.fontColor)}">
-                        </div>
-                    </div>`;
+            activeLine.opacity = normalizeOpacity(activeLine.opacity, normalizeOpacity(electron.store.get('textOpacity'), 1));
+            activeLine.fontWeight = activeLine.fontWeight || electron.store.get('textFontWeight');
+            formRows += formRow(
+                "Font",
+                `<select id="positionFont" class="w3-input positionInputMedium" onchange="updateTextSetting(this, '${position}','${line}', 'font')">
+                    ${getFontOptionsHtml(activeLine.font)}
+                </select>`,
+                "positionFont"
+            );
+            formRows += formRow(
+                "Font Size",
+                `<input class="w3-input positionInputTiny" id="positionTextSize" type="number" step=".1" oninput="updateTextSetting(this, '${position}','${line}', 'fontSize')" onchange="updateTextSetting(this, '${position}','${line}', 'fontSize')" value="${attrEscape(activeLine.fontSize)}">
+                 <label for="positionTextSizeUnit">Unit</label>
+                 <select id="positionTextSizeUnit" class="positionInputTiny" onchange="updateTextSetting(this, '${position}','${line}', 'fontSizeUnit')">
+                    ${getTextSizeUnitOptionsHtml(activeLine.fontSizeUnit)}
+                 </select>`,
+                "positionTextSize"
+            );
+            formRows += formRow(
+                "Color",
+                `<input id="positionTextColor" class="w3-input positionColorInput" type="color" oninput="updateTextSetting(this, '${position}','${line}', 'fontColor')" onchange="updateTextSetting(this, '${position}','${line}', 'fontColor')" value="${attrEscape(activeLine.fontColor)}">`,
+                "positionTextColor"
+            );
+            formRows += formRow(
+                "Opacity",
+                `<input class="slider textOpacitySlider" id="positionTextOpacity" type="range" min="0" max="1" step=".01" oninput="document.getElementById('positionTextOpacityValue').textContent = Number(this.value).toFixed(2); updateTextSetting(this, '${position}','${line}', 'opacity')" onchange="updateTextSetting(this, '${position}','${line}', 'opacity')" value="${attrEscape(activeLine.opacity)}">
+                 <span id="positionTextOpacityValue">${normalizeOpacity(activeLine.opacity, 1).toFixed(2)}</span>`,
+                "positionTextOpacity"
+            );
+            formRows += formRow(
+                "Font Weight",
+                `<input class="w3-input positionInputTiny" id="positionTextWeight" type="number" min="100" max="900" step="100" oninput="updateTextSetting(this, '${position}','${line}', 'fontWeight')" onchange="updateTextSetting(this, '${position}','${line}', 'fontWeight')" value="${attrEscape(activeLine.fontWeight)}">`,
+                "positionTextWeight"
+            );
         }
+        const html = `<div class="positionDetailsPanel"><div class="formGrid">${formRows}</div></div>`;
 
         $('#positionDetails').html(html);
 
@@ -903,7 +980,7 @@ function updatePositionType(position, line) {
             }
         }
     } else {
-        $('#positionDetails').html(html);
+        $('#positionDetails').html("");
     }
     electron.store.set('displayText', displayTextSettings);
     colorTextPositionRadio();
@@ -912,7 +989,13 @@ function updatePositionType(position, line) {
 //Text settings are stored separate from other settings, so they require their own functions
 function updateTextSetting(input, position, line, setting) {
     let text = electron.store.get('displayText');
-    text[position][line][setting] = input.value;
+    if (setting === "fontSizeUnit") {
+        text[position][line][setting] = normalizeTextSizeUnit(input.value);
+    } else if (setting === "opacity") {
+        text[position][line][setting] = normalizeOpacity(input.value, 1);
+    } else {
+        text[position][line][setting] = input.value;
+    }
     electron.store.set('displayText', text);
 }
 

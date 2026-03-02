@@ -353,8 +353,8 @@ async function isFullscreenAppActive() {
 //window creation code
 function createConfigWindow(argv) {
     let win = new BrowserWindow({
-        width: 1000,
-        height: 750,
+        width: 1080,
+        height: 810,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -366,8 +366,8 @@ function createConfigWindow(argv) {
         minimizable: true,
         maximizable: true,
         autoHideMenuBar: true,
-        minWidth: 980,
-        minHeight: 700,
+        minWidth: 1024,
+        minHeight: 768,
         icon: path.join(__dirname, 'icon.ico')
     });
     if (typeof win.removeMenu === "function") {
@@ -430,6 +430,7 @@ function createSSWindow(argv) {
     let displays = screen.getAllDisplays();
     store.set('numDisplays', displays.length);
     for (let i = 0; i < displays.length; i++) {
+        const renderScreensaver = !(store.get("onlyShowVideoOnPrimaryMonitor") && displays[i].id !== screen.getPrimaryDisplay().id);
         let win = new BrowserWindow({
             width: displays[i].size.width,
             height: displays[i].size.height,
@@ -449,17 +450,22 @@ function createSSWindow(argv) {
             icon: path.join(__dirname, 'icon.ico'),
             show: false
         })
-        if (store.get("onlyShowVideoOnPrimaryMonitor") && displays[i].id !== screen.getPrimaryDisplay().id) {
+        if (!renderScreensaver) {
             win.loadFile('web/black.html');
         } else {
             win.loadFile('web/screensaver.html');
+            win.webContents.once('did-finish-load', () => {
+                win.webContents.send('screenNumber', i);
+            });
         }
         win.on('closed', function () {
             win = null;
         });
         win.once('ready-to-show', () => {
-            win.webContents.send('screenNumber', i);
             win.show();
+            if (renderScreensaver) {
+                win.webContents.send('screensaverVisible');
+            }
         })
         if (!nq) {
             win.setMenu(null);
@@ -502,6 +508,9 @@ function createSSPWindow(argv) {
         show: false
     });
     win.loadFile('web/screensaver.html');
+    win.webContents.once('did-finish-load', () => {
+        win.webContents.send('screenNumber', 0);
+    });
     win.on('closed', function () {
         screens.pop(screens.indexOf(win));
         nq = false;
@@ -509,8 +518,8 @@ function createSSPWindow(argv) {
         preview = false;
     });
     win.once('ready-to-show', () => {
-        win.webContents.send('screenNumber', 0);
         win.show();
+        win.webContents.send('screensaverVisible');
     })
     if (argv) {
         if (argv.includes("/dt")) {
@@ -524,8 +533,8 @@ function createSSPWindow(argv) {
 
 function createEditWindow(argv) {
     let win = new BrowserWindow({
-        width: 1000,
-        height: 750,
+        width: 1080,
+        height: 810,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -821,9 +830,13 @@ function setUpConfigFile() {
     //text settings
     store.set('textFont', store.get('textFont') ?? "Segoe UI");
     store.set('textSize', store.get('textSize') ?? "2");
+    store.set('textSizeUnit', store.get('textSizeUnit') ?? "vw");
     store.set('textColor', store.get('textColor') ?? "#FFFFFF");
+    store.set('textOpacity', store.get('textOpacity') ?? "1");
     store.set('textLineHeight', store.get('textLineHeight') ?? "1.2");
     store.set('textFontWeight', store.get('textFontWeight') ?? "400");
+    store.set('textFadeInDuration', store.get('textFadeInDuration') ?? 650);
+    store.set('textFadeOutDuration', store.get('textFadeOutDuration') ?? 260);
     let displayText = store.get('displayText');
     if (displayText) {
         if (!displayText.topleft[0]) {

@@ -494,7 +494,7 @@
                         <div class="positionControlsPane w3-right-align">
                             <div id="positionType" class="positionTypePanel" style="display: none;">
                                 <table class="w3-table-all">
-                                    <tr id="positionRow0">
+                                    <tr id="positionRow0" class="positionLineRow">
                                         <td id="positionLineNum0">Line 1</td>
                                         <td>
                                             <label for="positionTypeSelect0">Type:</label>
@@ -509,7 +509,7 @@
                                             </select>
                                         </td>
                                     </tr>
-                                    <tr id="positionRow1">
+                                    <tr id="positionRow1" class="positionLineRow">
                                         <td id="positionLineNum1">Line 2</td>
                                         <td><label for="positionTypeSelect1">Type:</label>
                                             <select id="positionTypeSelect1">
@@ -523,7 +523,7 @@
                                             </select>
                                         </td>
                                     </tr>
-                                    <tr id="positionRow2">
+                                    <tr id="positionRow2" class="positionLineRow">
                                         <td id="positionLineNum2">Line 3</td>
                                         <td><label for="positionTypeSelect2">Type:</label>
                                             <select id="positionTypeSelect2">
@@ -537,7 +537,7 @@
                                             </select>
                                         </td>
                                     </tr>
-                                    <tr id="positionRow3">
+                                    <tr id="positionRow3" class="positionLineRow">
                                         <td id="positionLineNum3">Line 4</td>
                                         <td><label for="positionTypeSelect3">Type:</label>
                                             <select id="positionTypeSelect3">
@@ -567,37 +567,89 @@
                 <div class="w3-container w3-blue">
                     <h4>Text Options</h4>
                 </div>
-                <div class="w3-display-container" style="padding: 2%">
-                    <div style="width:300px;">
-                        <label for="textFont">Font: </label>
-                        <select id="textFont" onchange="updateSetting('textFont', 'select')"></select>
+                <div class="w3-display-container textOptionsPanel" style="padding: 2%">
+                    <div class="formGrid">
+                        <div class="formRow">
+                            <label class="formLabel" for="textFont">Font</label>
+                            <div class="formControl">
+                                <select id="textFont" class="textOptionInputWide" onchange="updateSetting('textFont', 'select')"></select>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="textSize">Font Size</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" id="textSize" type="number" step=".1"
+                                       oninput="updateSetting('textSize', 'number')" onchange="updateSetting('textSize', 'number')">
+                                <label for="textSizeUnit">Unit</label>
+                                <select id="textSizeUnit" class="textOptionInputTiny" onchange="updateSetting('textSizeUnit', 'select')">
+                                    <option value="vw">vw</option>
+                                    <option value="vh">vh</option>
+                                    <option value="vmin">vmin</option>
+                                    <option value="vmax">vmax</option>
+                                    <option value="rem">rem</option>
+                                    <option value="em">em</option>
+                                    <option value="px">px</option>
+                                    <option value="%">%</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="textColor">Color</label>
+                            <div class="formControl">
+                                <input class="w3-input positionColorInput" id="textColor" type="color"
+                                       oninput="updateSetting('textColor', 'text')" onchange="updateSetting('textColor', 'text')">
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="textOpacity">Opacity</label>
+                            <div class="formControl">
+                                <input class="slider textOpacitySlider" id="textOpacity" type="range" min="0" max="1" step=".01"
+                                       oninput="updateSetting('textOpacity', 'slider')" onchange="updateSetting('textOpacity', 'slider')">
+                                <span id="textOpacityText">1</span>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="textLineHeight">Line Height</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" id="textLineHeight"
+                                       type="number" step=".05" min=".5" max="3"
+                                       oninput="updateSetting('textLineHeight', 'number')" onchange="updateSetting('textLineHeight', 'number')">
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="textFontWeight">Font Weight</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" id="textFontWeight"
+                                       type="number" step="100" min="100" max="900"
+                                       oninput="updateSetting('textFontWeight', 'number')" onchange="updateSetting('textFontWeight', 'number')">
+                            </div>
+                        </div>
+                        <div class="formRow formRowFull"><hr></div>
+                        <div class="formRow">
+                            <label class="formLabel" for="randomSpeed">Change random position every</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" id="randomSpeed" type="number" step="1"
+                                       oninput="updateSetting('randomSpeed', 'number')" onchange="updateSetting('randomSpeed', 'number')">
+                                <span>seconds</span>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="textFadeInDuration">Text Fade-In</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" id="textFadeInDuration" type="number" step="10" min="0"
+                                       oninput="updateSetting('textFadeInDuration', 'number')" onchange="updateSetting('textFadeInDuration', 'number')">
+                                <span>ms</span>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="textFadeOutDuration">Text Fade-Out</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" id="textFadeOutDuration" type="number" step="10" min="0"
+                                       oninput="updateSetting('textFadeOutDuration', 'number')" onchange="updateSetting('textFadeOutDuration', 'number')">
+                                <span>ms</span>
+                            </div>
+                        </div>
                     </div>
-                    <br>
-                    <label for="textSize">Font
-                        Size: </label><input class="w3-input" id="textSize" type="number" step=".25"
-                                             style="width: 25%; display: inline; margin-top: 2%"
-                                             onchange="updateSetting('textSize', 'number')">
-                    <br>
-                    <label for="textColor">Color: </label><input class="w3-input" id="textColor" type="color"
-                                                                 step=".25"
-                                                                 style="width: 5%; display: inline; margin-top: 2%; padding: 0;"
-                                                                 onchange="updateSetting('textColor', 'text')">
-                    <br>
-                    <label for="textLineHeight">Line Height: </label><input class="w3-input" id="textLineHeight"
-                                                                            type="number" step=".05" min=".5" max="3"
-                                                                            style="width: 25%; display: inline; margin-top: 2%"
-                                                                            onchange="updateSetting('textLineHeight', 'number')">
-                    <br>
-                    <label for="textFontWeight">Font Weight: </label><input class="w3-input" id="textFontWeight"
-                                                                            type="number" step="100" min="100" max="900"
-                                                                            style="width: 25%; display: inline; margin-top: 2%"
-                                                                            onchange="updateSetting('textFontWeight', 'number')">
-                    <hr>
-                    <label for="textSize">Change random position every </label><input class="w3-input" id="randomSpeed"
-                                                                            type="number" step="1"
-                                                                            style="width: 10%; display: inline; margin-top: 2%"
-                                                                            onchange="updateSetting('randomSpeed', 'number')"> seconds
-
                 </div>
             </div>
         </div>
