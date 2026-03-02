@@ -32,10 +32,10 @@ This document tracks the **remaining** modernization work after completing:
 **Output:** measurable data for regression checks before releases.
 
 ## 3) Asset organization plan (images are still required)
-`images/*` remains needed for project/docs purposes and should not be deleted.
+`assets/images/*` remains needed for project/docs purposes and should not be deleted.
 
 Proposed migration (future PR):
-1. Move image assets to `assets/images/*`.
+1. Move image assets to `assets/images/*` (completed in this update).
 2. Update all repository references (e.g., README paths and any HTML/docs references).
 3. Keep Electron packaging exclusions aligned so non-runtime assets stay out of installers.
 4. Add `docs/ASSET_INVENTORY.md` mapping each asset to its purpose (runtime UI, docs, design source, etc.).
@@ -58,7 +58,7 @@ Proposed migration (future PR):
 
 ## Suggested execution order
 1. Rendering path simplification and instrumentation.
-2. Asset move to `assets/images/*` + path updates.
+2. Asset inventory + cleanup under `assets/images/*`.
 3. Dependency vulnerability remediation.
 4. Tooling/lint polish.
 

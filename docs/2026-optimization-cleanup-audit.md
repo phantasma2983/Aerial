@@ -4,7 +4,7 @@
 - Main process/runtime: `app.js`, `preload.js`, `package.json`, `package-lock.json`.
 - Renderer/UI: `web/config.html|css|js`, `web/screensaver.html|css|js`, `web/video-info.html|css|js`.
 - Tooling/editor helpers: `json-editor/*`.
-- Repository assets/docs for stale-file risk: `images/*`, `documentation/*`, root metadata.
+- Repository assets/docs for stale-file risk: `assets/images/*`, `documentation/*`, root metadata.
 
 ---
 
@@ -45,7 +45,7 @@ The highest-priority fixes are small and low-risk: normalize dependencies, remov
 **Impact:** maintenance complexity and performance troubleshooting overhead.
 
 ### 5) Stale/non-runtime assets are mixed into main repo tree (medium priority)
-- Build excludes `documentation/*` and `images/*`, yet the repo includes large documentation binaries and design-source artifacts (`.ai`, `.psd`) in `images/icon` and `images/icons`.
+- Build excludes `documentation/*` and `assets/images/*`, yet the repo includes large documentation binaries and design-source artifacts (`.ai`, `.psd`) in `assets/images/icon` and `assets/images/icons`.
 
 **Impact:** repo bloat and slower clone/review cycles; unclear what is canonical runtime asset vs source artwork.
 
@@ -61,8 +61,8 @@ The highest-priority fixes are small and low-risk: normalize dependencies, remov
 These are candidates for archival, relocation, or clear labeling:
 
 1. `documentation/Aerial for Windows - User Manual.docx` (source document) + PDF copy in same folder.
-2. Design source files under `images/icon` and `images/icons` (`.ai`, `.psd`) that are not runtime assets.
-3. Historical preview GIF variants (`images/surface_preview.gif`, `images/surface_preview_wiki.gif`) if both are no longer needed.
+2. Design source files under `assets/images/icon` and `assets/images/icons` (`.ai`, `.psd`) that are not runtime assets.
+3. Historical preview GIF variants (`assets/images/surface_preview.gif`, `assets/images/surface_preview_wiki.gif`) if both are no longer needed.
 4. Vendored web libraries under `web/libraries/*` should be version-inventoried and minimized (especially if some are only used in one screen).
 
 Recommendation: keep if needed, but move to `assets/source/` or `docs/source/` and document ownership.
