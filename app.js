@@ -124,6 +124,7 @@ let suspend = false;
 let suspendCountdown;
 let isComputerSleeping = false;
 let isComputerSuspendedOrLocked = false;
+let isAppQuitting = false;
 let launchScreensaverBusy = false;
 let fullscreenCheckInProgress = false;
 let foregroundFullscreenCache = {value: false, checkedAt: 0};
@@ -506,6 +507,9 @@ function createTrayWindow() {
     //trayWin.loadURL("https://google.com/");
     trayWin.on("close", (event) => {
         // Keep tray window hidden instead of destroyed when users close it.
+        if (isAppQuitting) {
+            return;
+        }
         event.preventDefault();
         if (!trayWin.isDestroyed()) {
             trayWin.hide();
@@ -558,6 +562,7 @@ function createTrayWindow() {
             {type: "separator"},
             {
                 label: "Exit Aerial", click: (item, window, event) => {
+                    isAppQuitting = true;
                     app.quit();
                 }
             },
@@ -571,6 +576,9 @@ function createTrayWindow() {
 
 //start up code
 app.allowRendererProcessReuse = true
+app.on('before-quit', () => {
+    isAppQuitting = true;
+});
 app.whenReady().then(startUp);
 
 function startUp() {
