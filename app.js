@@ -128,6 +128,8 @@ let isAppQuitting = false;
 let launchScreensaverBusy = false;
 let fullscreenCheckInProgress = false;
 let foregroundFullscreenCache = {value: false, checkedAt: 0};
+let trayWindow = null;
+let trayIcon = null;
 let startTime = new Date();
 let tod = {"day": [], "night": [], "none": []};
 let astronomy = {
@@ -495,7 +497,11 @@ function createEditWindow(argv) {
 }
 
 function createTrayWindow() {
-    let trayWin = new BrowserWindow({
+    if (trayWindow && !trayWindow.isDestroyed() && trayIcon) {
+        return;
+    }
+
+    trayWindow = new BrowserWindow({
         width: 800, height: 600, center: true, minimizable: false, show: false,
         webPreferences: {
             nodeIntegration: false,
@@ -504,16 +510,19 @@ function createTrayWindow() {
         },
         icon: path.join(__dirname, 'icon.ico')
     });
-    //trayWin.loadURL("https://google.com/");
-    trayWin.on("close", (event) => {
+    //trayWindow.loadURL("https://google.com/");
+    trayWindow.on("close", (event) => {
         // Keep tray window hidden instead of destroyed when users close it.
         if (isAppQuitting) {
             return;
         }
         event.preventDefault();
-        if (!trayWin.isDestroyed()) {
-            trayWin.hide();
+        if (!trayWindow.isDestroyed()) {
+            trayWindow.hide();
         }
+    });
+    trayWindow.on("closed", () => {
+        trayWindow = null;
     });
 
     function newMenu(isSuspendChecked) {
@@ -543,7 +552,9 @@ function createTrayWindow() {
                 click: (e) => {
                     suspend = true;
                     clearTimeout(suspendCountdown);
-                    trayWin.tray.setContextMenu(newMenu(true));
+                    if (trayIcon) {
+                        trayIcon.setContextMenu(newMenu(true));
+                    }
                     suspendCountdown = setTimeout(() => {
                         suspend = false
                     }, (1000 * 60) + (store.get('startAfter') * 60));
@@ -569,9 +580,9 @@ function createTrayWindow() {
         ]);
     }
 
-    trayWin.tray = new Tray(path.join(__dirname, 'icon.ico'));
-    trayWin.tray.setContextMenu(newMenu(false));
-    trayWin.tray.setToolTip("Aerial");
+    trayIcon = new Tray(path.join(__dirname, 'icon.ico'));
+    trayIcon.setContextMenu(newMenu(false));
+    trayIcon.setToolTip("Aerial");
 }
 
 //start up code
