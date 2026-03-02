@@ -61,6 +61,27 @@ const appReleasesUrl = `${appRepoUrl}/releases`;
 const appWikiUrl = `${appRepoUrl}/wiki`;
 const appLicenseUrl = `${appRepoUrl}/blob/HEAD/LICENSE`;
 const MAX_VIDEO_HISTORY = 150;
+const LIFECYCLE_LOG_FILE = "aerial-lifecycle.log";
+
+function logLifecycle(eventName, details) {
+    let detailText = "";
+    if (details !== undefined) {
+        try {
+            detailText = ` ${JSON.stringify(details)}`;
+        } catch {
+            detailText = ` ${String(details)}`;
+        }
+    }
+    const line = `${new Date().toISOString()} [lifecycle] ${eventName}${detailText}`;
+    console.log(line);
+    try {
+        const userData = app.getPath('userData');
+        fs.appendFile(path.join(userData, LIFECYCLE_LOG_FILE), `${line}\n`, () => {
+        });
+    } catch {
+        // best-effort diagnostics only
+    }
+}
 
 function setRepositoryMetadata() {
     store.set('repositoryUrl', appRepoUrl);
@@ -129,6 +150,7 @@ const launchedAsScreensaverSession = process.argv.some((arg) => {
     const normalized = String(arg || "").toLowerCase();
     return normalized === "/s" || normalized === "/p" || normalized === "/t";
 });
+let exitingScreensaverWindows = false;
 let launchScreensaverBusy = false;
 let fullscreenCheckInProgress = false;
 let foregroundFullscreenCache = {value: false, checkedAt: 0};
@@ -354,6 +376,12 @@ function createConfigWindow(argv) {
 }
 
 function createSSWindow(argv) {
+    logLifecycle("createSSWindow:start", {
+        argv,
+        nq,
+        useTray: store.get('useTray'),
+        screensCount: screens.length
+    });
     switch (argv) {
         case undefined:
             break
@@ -399,6 +427,10 @@ function createSSWindow(argv) {
             });
         }
         win.on('closed', function () {
+            logLifecycle("createSSWindow:window-closed", {
+                displayId: displays[i].id,
+                remainingTrackedScreens: screens.length
+            });
             win = null;
         });
         win.once('ready-to-show', () => {
@@ -502,8 +534,10 @@ function createEditWindow(argv) {
 
 function createTrayWindow() {
     if (trayWindow && !trayWindow.isDestroyed() && trayIcon) {
+        logLifecycle("createTrayWindow:reuse-existing");
         return;
     }
+    logLifecycle("createTrayWindow:create");
 
     trayWindow = new BrowserWindow({
         width: 800, height: 600, center: true, minimizable: false, show: false,
@@ -517,6 +551,7 @@ function createTrayWindow() {
     //trayWindow.loadURL("https://google.com/");
     trayWindow.on("close", (event) => {
         // Keep tray window hidden instead of destroyed when users close it.
+        logLifecycle("trayWindow:close", {isAppQuitting});
         if (isAppQuitting) {
             return;
         }
@@ -526,6 +561,7 @@ function createTrayWindow() {
         }
     });
     trayWindow.on("closed", () => {
+        logLifecycle("trayWindow:closed");
         trayWindow = null;
     });
 
@@ -577,6 +613,7 @@ function createTrayWindow() {
             {type: "separator"},
             {
                 label: "Exit Aerial", click: (item, window, event) => {
+                    logLifecycle("trayMenu:exit-click");
                     isAppQuitting = true;
                     app.quit();
                 }
@@ -587,23 +624,49 @@ function createTrayWindow() {
     trayIcon = new Tray(path.join(__dirname, 'icon.ico'));
     trayIcon.setContextMenu(newMenu(false));
     trayIcon.setToolTip("Aerial");
+    logLifecycle("createTrayWindow:ready");
 }
 
 //start up code
 app.allowRendererProcessReuse = true
 app.on('before-quit', () => {
+    logLifecycle("app:before-quit");
     isAppQuitting = true;
 });
 app.on('window-all-closed', (event) => {
-    if (isAppQuitting || launchedAsScreensaverSession || !store.get('useTray')) {
+    logLifecycle("app:window-all-closed", {
+        isAppQuitting,
+        launchedAsScreensaverSession,
+        exitingScreensaverWindows,
+        useTray: store.get('useTray'),
+        trayWindowExists: Boolean(trayWindow && !trayWindow.isDestroyed()),
+        trayIconExists: Boolean(trayIcon),
+        screensCount: screens.length
+    });
+    if (isAppQuitting || launchedAsScreensaverSession) {
         return;
     }
     event.preventDefault();
-    createTrayWindow();
+    if (exitingScreensaverWindows) {
+        if (store.get('useTray')) {
+            createTrayWindow();
+        } else {
+            createConfigWindow();
+        }
+        return;
+    }
+    if (store.get('useTray')) {
+        createTrayWindow();
+    }
 });
 app.whenReady().then(startUp);
 
 function startUp() {
+    logLifecycle("startUp", {
+        argv: process.argv,
+        isPackaged: app.isPackaged,
+        launchedAsScreensaverSession
+    });
     Menu.setApplicationMenu(null);
     setRepositoryMetadata();
     //Uncomment the line below when compiling the .scr file
@@ -1409,24 +1472,39 @@ function clearCacheTemp() {
 
 //open & close functions
 function quitApp() {
+    logLifecycle("quitApp:requested", {
+        nq,
+        useTray: store.get('useTray'),
+        screensCount: screens.length,
+        trayWindowExists: Boolean(trayWindow && !trayWindow.isDestroyed()),
+        trayIconExists: Boolean(trayIcon)
+    });
     if (!nq) {
         //app.quit();
         if (store.get("lockAfterRun") && (new Date() - startTime) / 1000 > store.get("lockAfterRunAfter")) {
             lockComputer();
         }
+        exitingScreensaverWindows = true;
+        logLifecycle("quitApp:closeAllWindows");
         closeAllWindows();
+        setTimeout(() => {
+            exitingScreensaverWindows = false;
+            logLifecycle("quitApp:exitingScreensaverWindows-reset");
+        }, 1000);
         currentlyPlaying = '';
         resetPlaybackHistory();
     }
 }
 
 function closeAllWindows() {
+    logLifecycle("closeAllWindows:start", {trackedScreens: screens.length});
     for (let i = 0; i < screens.length; i++) {
         if (!screens[i].isDestroyed()) {
             screens[i].close();
         }
     }
     screens = [];
+    logLifecycle("closeAllWindows:done");
 }
 
 function sleepComputer() {
