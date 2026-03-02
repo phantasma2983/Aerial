@@ -76,8 +76,7 @@ function logLifecycle(eventName, details) {
     console.log(line);
     try {
         const userData = app.getPath('userData');
-        fs.appendFile(path.join(userData, LIFECYCLE_LOG_FILE), `${line}\n`, () => {
-        });
+        fs.appendFileSync(path.join(userData, LIFECYCLE_LOG_FILE), `${line}\n`);
     } catch {
         // best-effort diagnostics only
     }
@@ -633,6 +632,12 @@ app.on('before-quit', () => {
     logLifecycle("app:before-quit");
     isAppQuitting = true;
 });
+app.on('will-quit', () => {
+    logLifecycle("app:will-quit");
+});
+app.on('quit', (_event, exitCode) => {
+    logLifecycle("app:quit", {exitCode});
+});
 app.on('window-all-closed', (event) => {
     logLifecycle("app:window-all-closed", {
         isAppQuitting,
@@ -658,6 +663,22 @@ app.on('window-all-closed', (event) => {
     if (store.get('useTray')) {
         createTrayWindow();
     }
+});
+process.on('beforeExit', (code) => {
+    logLifecycle("process:beforeExit", {code});
+});
+process.on('exit', (code) => {
+    logLifecycle("process:exit", {code});
+});
+process.on('uncaughtException', (error) => {
+    logLifecycle("process:uncaughtException", {
+        name: error?.name,
+        message: error?.message,
+        stack: error?.stack
+    });
+});
+process.on('unhandledRejection', (reason) => {
+    logLifecycle("process:unhandledRejection", {reason: String(reason)});
 });
 app.whenReady().then(startUp);
 
@@ -1472,6 +1493,10 @@ function clearCacheTemp() {
 
 //open & close functions
 function quitApp() {
+    if (exitingScreensaverWindows) {
+        logLifecycle("quitApp:ignored-reentry");
+        return;
+    }
     logLifecycle("quitApp:requested", {
         nq,
         useTray: store.get('useTray'),
