@@ -1,0 +1,264 @@
+:root {
+    --font-ui: "Bahnschrift", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+    --font-title: "Bahnschrift SemiBold", "Candara", sans-serif;
+    --bg: #0b1220;
+    --bg-alt: #111a2d;
+    --surface: #172338;
+    --surface-2: #0f1a2d;
+    --surface-soft: rgba(26, 39, 61, 0.9);
+    --text: #ecf3ff;
+    --text-muted: #9cb2ce;
+    --line: rgba(130, 161, 202, 0.24);
+    --accent: #2cc3b3;
+    --accent-strong: #18aa9b;
+    --accent-soft: rgba(44, 195, 179, 0.22);
+    --btn-bg: #223149;
+    --btn-hover: #2a3e5d;
+    --btn-border-hover: #2cc3b3;
+    --input-bg: #131f32;
+    --focus-ring: rgba(44, 195, 179, 0.28);
+    --shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --speed: 180ms;
+}
+
+body[data-theme="light"] {
+    --bg: #f2f6fc;
+    --bg-alt: #e7eef8;
+    --surface: #ffffff;
+    --surface-2: #edf3fb;
+    --surface-soft: rgba(255, 255, 255, 0.94);
+    --text: #152136;
+    --text-muted: #5d708f;
+    --line: rgba(79, 108, 148, 0.25);
+    --accent: #0fa496;
+    --accent-strong: #0a857a;
+    --accent-soft: rgba(15, 164, 150, 0.14);
+    --btn-bg: #f6fbff;
+    --btn-hover: #e8f2fb;
+    --btn-border-hover: #0fa496;
+    --input-bg: #ffffff;
+    --focus-ring: rgba(15, 164, 150, 0.24);
+    --shadow: 0 10px 26px rgba(37, 60, 98, 0.14);
+}
+
+html,
+body {
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    font-family: var(--font-ui);
+    color: var(--text);
+    background:
+        radial-gradient(1200px 380px at -5% -10%, rgba(44, 195, 179, 0.16), transparent 65%),
+        radial-gradient(1000px 380px at 110% 0%, rgba(57, 122, 255, 0.12), transparent 70%),
+        linear-gradient(155deg, var(--bg) 0%, var(--bg-alt) 100%);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+.editorTopBar {
+    position: sticky;
+    top: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-soft);
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(8px);
+}
+
+.editorTitle {
+    margin: 0;
+    font-family: var(--font-title);
+    font-size: 1.5rem;
+    letter-spacing: 0.35px;
+}
+
+.editorTopBarActions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+button,
+.w3-button {
+    border-radius: var(--radius-md) !important;
+    border: 1px solid var(--line) !important;
+    background: var(--btn-bg);
+    color: var(--text) !important;
+    min-height: 38px;
+    padding: 0 14px !important;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    transition: background-color var(--speed) ease, border-color var(--speed) ease, transform var(--speed) ease, box-shadow var(--speed) ease;
+}
+
+button:hover,
+.w3-button:hover {
+    background: var(--btn-hover) !important;
+    border-color: var(--btn-border-hover) !important;
+    transform: translateY(-1px);
+}
+
+.editorContent {
+    padding: 14px;
+}
+
+.editorVideoList {
+    display: grid;
+    gap: 14px;
+}
+
+.editorCard {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+}
+
+.editorCardHeader {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(135deg, rgba(44, 195, 179, 0.22), rgba(24, 170, 155, 0.15)), var(--surface);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.editorCardHeader h3 {
+    margin: 0;
+    font-size: 1.35rem;
+    font-family: var(--font-title);
+}
+
+.editorGrid {
+    padding: 14px;
+    display: grid;
+    grid-template-columns: minmax(380px, 1fr) minmax(320px, 1fr);
+    gap: 14px;
+}
+
+.editorFields,
+.editorJson {
+    display: grid;
+    gap: 10px;
+}
+
+.fieldRow {
+    display: grid;
+    gap: 6px;
+}
+
+.fieldRow label {
+    color: var(--text-muted);
+    font-size: 0.95rem;
+}
+
+.idValue {
+    color: var(--text);
+    font-family: Consolas, "Courier New", monospace;
+    font-size: 0.93rem;
+    overflow-wrap: anywhere;
+}
+
+.editorTextarea {
+    min-height: 148px;
+    resize: vertical;
+    font-family: Consolas, "Courier New", monospace;
+    line-height: 1.35;
+}
+
+input[type="text"],
+select,
+textarea {
+    width: 100%;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+    background: var(--input-bg);
+    color: var(--text);
+    transition: border-color var(--speed) ease, box-shadow var(--speed) ease;
+}
+
+input[type="text"]:focus,
+select:focus,
+textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--focus-ring);
+    outline: none;
+}
+
+.w3-modal {
+    backdrop-filter: blur(6px);
+    background: rgba(6, 9, 16, 0.55);
+}
+
+.w3-modal-content {
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--shadow);
+}
+
+.editorModalBody {
+    position: relative;
+    padding: 16px;
+    color: var(--text) !important;
+}
+
+.editorModalBody .w3-display-topright.w3-button {
+    top: 8px;
+    right: 8px;
+    min-height: 34px;
+    padding: 0 10px !important;
+    font-size: 1.1rem;
+}
+
+#modalVideo,
+#exportText {
+    width: 100%;
+}
+
+#exportText {
+    height: 460px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+    background: var(--input-bg);
+    color: var(--text);
+    font-family: Consolas, "Courier New", monospace;
+    line-height: 1.35;
+    padding: 10px;
+}
+
+@media (max-width: 1100px) {
+    .editorGrid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 760px) {
+    .editorTitle {
+        font-size: 1.2rem;
+    }
+
+    .editorTopBar {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

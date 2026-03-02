@@ -1,6 +1,7 @@
 const {contextBridge, ipcRenderer} = require("electron");
 const Store = require('electron-store');
 const store = new Store();
+const bundledVideos = require("./videos.json");
 
 // Expose protected methods from node modules
 contextBridge.exposeInMainWorld("electron", {
@@ -35,7 +36,8 @@ contextBridge.exposeInMainWorld("electron", {
                 return store.set(key, value);
             }
         },
-        videos: require("./videos.json"),
+        videos: store.get("videoCatalog") ?? bundledVideos,
+        bundledVideos,
         fontListUniversal: require('font-list-universal'),
     }
 )

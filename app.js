@@ -12,8 +12,8 @@ const {
     Notification,
     globalShortcut
 } = require('electron');
-const {exec} = require('child_process');
-const videos = require("./videos.json");
+const {exec, execFile} = require('child_process');
+const bundledVideos = require("./videos.json");
 const packageMetadata = require("./package.json");
 const Store = require('electron-store');
 const store = new Store();
@@ -59,6 +59,7 @@ const appRepoUrl = `https://github.com/${appRepo}`;
 const appReleasesUrl = `${appRepoUrl}/releases`;
 const appWikiUrl = `${appRepoUrl}/wiki`;
 const appLicenseUrl = `${appRepoUrl}/blob/HEAD/LICENSE`;
+const MAX_VIDEO_HISTORY = 150;
 
 function setRepositoryMetadata() {
     store.set('repositoryUrl', appRepoUrl);
@@ -66,6 +67,112 @@ function setRepositoryMetadata() {
     store.set('wikiUrl', appWikiUrl);
     store.set('licenseUrl', appLicenseUrl);
     store.set('upstreamRepositoryUrl', UPSTREAM_REPO_URL);
+}
+
+function isValidVideoSourceMap(src) {
+    if (!src || typeof src !== "object") {
+        return false;
+    }
+    return Object.values(src).some((value) => typeof value === "string" && value.trim().length > 0);
+}
+
+function sanitizeExtraVideo(video) {
+    if (!video || typeof video !== "object") {
+        return null;
+    }
+    if (typeof video.id !== "string" || video.id.trim().length === 0 || video.id.startsWith("_")) {
+        return null;
+    }
+    if (!isValidVideoSourceMap(video.src)) {
+        return null;
+    }
+
+    const trimmedId = video.id.trim();
+    const src = {};
+    for (const [key, value] of Object.entries(video.src)) {
+        if (typeof value === "string" && value.trim().length > 0) {
+            src[key] = value.trim();
+        }
+    }
+    if (!isValidVideoSourceMap(src)) {
+        return null;
+    }
+
+    return {
+        ...video,
+        id: trimmedId,
+        src,
+        type: typeof video.type === "string" && video.type.trim().length > 0 ? video.type : "landscape",
+        timeOfDay: typeof video.timeOfDay === "string" && video.timeOfDay.trim().length > 0 ? video.timeOfDay : "none",
+        name: typeof video.name === "string" && video.name.trim().length > 0 ? video.name.trim() : undefined,
+        accessibilityLabel: typeof video.accessibilityLabel === "string" && video.accessibilityLabel.trim().length > 0 ? video.accessibilityLabel.trim() : (video.name ?? trimmedId),
+        userAdded: true
+    };
+}
+
+function getExtraVideos() {
+    const extras = store.get("extraVideos") ?? [];
+    if (!Array.isArray(extras)) {
+        return [];
+    }
+    const seen = new Set();
+    const sanitized = [];
+    for (const extra of extras) {
+        const valid = sanitizeExtraVideo(extra);
+        if (!valid || seen.has(valid.id)) {
+            continue;
+        }
+        seen.add(valid.id);
+        sanitized.push(valid);
+    }
+    return sanitized;
+}
+
+function getVideoCatalog() {
+    const catalog = [...bundledVideos];
+    const seen = new Set(catalog.map((video) => video.id));
+    for (const extra of getExtraVideos()) {
+        if (!seen.has(extra.id)) {
+            catalog.push(extra);
+            seen.add(extra.id);
+        }
+    }
+    return catalog;
+}
+
+function syncVideoCatalog() {
+    const extras = getExtraVideos();
+    const catalog = getVideoCatalog();
+    store.set("extraVideos", extras);
+    store.set("videoCatalog", catalog);
+    return catalog;
+}
+
+function getVideoSource(videoInfo) {
+    if (!videoInfo || !videoInfo.src) {
+        return undefined;
+    }
+    const preferredType = store.get('videoFileType');
+    const aliases = {
+        H2651080p: "HEVC1080p",
+        H2654k: "HEVC2160p"
+    };
+    const resolvedPreferredType = aliases[preferredType] ?? preferredType;
+    if (videoInfo.src[resolvedPreferredType]) {
+        return videoInfo.src[resolvedPreferredType];
+    }
+    const fallbackOrder = ["H2641080p", "HEVC1080p", "HEVC2160p"];
+    for (const fallbackType of fallbackOrder) {
+        if (videoInfo.src[fallbackType]) {
+            return videoInfo.src[fallbackType];
+        }
+    }
+    for (const value of Object.values(videoInfo.src)) {
+        if (typeof value === "string" && value.length > 0) {
+            return value;
+        }
+    }
+    return undefined;
 }
 
 //initialize variables
@@ -77,11 +184,16 @@ let downloading = false;
 let allowedVideos = store.get("allowedVideos");
 let previouslyPlayed = [];
 let currentlyPlaying = '';
+let playedVideoHistory = [];
+let playedVideoHistoryIndex = -1;
 let preview = false;
 let suspend = false;
 let suspendCountdown;
 let isComputerSleeping = false;
 let isComputerSuspendedOrLocked = false;
+let launchScreensaverBusy = false;
+let fullscreenCheckInProgress = false;
+let foregroundFullscreenCache = {value: false, checkedAt: 0};
 let startTime = new Date();
 let tod = {"day": [], "night": [], "none": []};
 let astronomy = {
@@ -99,6 +211,145 @@ exec('NET SESSION', function (err, so, se) {
     //console.log(se.length === 0 ? "admin" : "not admin");
 });
 
+function resetPlaybackHistory() {
+    playedVideoHistory = [];
+    playedVideoHistoryIndex = -1;
+}
+
+function pushVideoToHistory(videoId) {
+    if (!videoId) {
+        return;
+    }
+    if (playedVideoHistoryIndex < playedVideoHistory.length - 1) {
+        playedVideoHistory = playedVideoHistory.slice(0, playedVideoHistoryIndex + 1);
+    }
+    playedVideoHistory.push(videoId);
+    if (playedVideoHistory.length > MAX_VIDEO_HISTORY) {
+        playedVideoHistory.shift();
+    }
+    playedVideoHistoryIndex = playedVideoHistory.length - 1;
+}
+
+function getPreviousVideoFromHistory() {
+    if (playedVideoHistoryIndex > 0) {
+        playedVideoHistoryIndex--;
+        return playedVideoHistory[playedVideoHistoryIndex];
+    }
+    if (playedVideoHistoryIndex === 0 && playedVideoHistory.length > 0) {
+        return playedVideoHistory[0];
+    }
+    return null;
+}
+
+function getForegroundWindowRect() {
+    return new Promise((resolve) => {
+        const script = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public class AerialWinApi {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+}
+'@
+$hwnd = [AerialWinApi]::GetForegroundWindow()
+if ($hwnd -eq [IntPtr]::Zero) { return }
+$rect = New-Object AerialWinApi+RECT
+[AerialWinApi]::GetWindowRect($hwnd, [ref]$rect) | Out-Null
+$pid = 0
+[AerialWinApi]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+$processName = ""
+try {
+  $processName = (Get-Process -Id $pid -ErrorAction Stop).ProcessName
+} catch {}
+$result = @{
+  left = $rect.Left
+  top = $rect.Top
+  right = $rect.Right
+  bottom = $rect.Bottom
+  processName = $processName
+}
+$result | ConvertTo-Json -Compress
+`.trim();
+
+        execFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+            timeout: 1500,
+            windowsHide: true
+        }, (error, stdout) => {
+            if (error || !stdout) {
+                resolve(null);
+                return;
+            }
+            try {
+                resolve(JSON.parse(stdout.trim()));
+            } catch {
+                resolve(null);
+            }
+        });
+    });
+}
+
+function isRectFullscreenOnAnyDisplay(rect) {
+    if (!rect) {
+        return false;
+    }
+    const tolerance = 4;
+    const width = rect.right - rect.left;
+    const height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        return false;
+    }
+    const displays = screen.getAllDisplays();
+    for (const display of displays) {
+        const bounds = display.bounds;
+        const matchesX = Math.abs(rect.left - bounds.x) <= tolerance;
+        const matchesY = Math.abs(rect.top - bounds.y) <= tolerance;
+        const matchesWidth = Math.abs(width - bounds.width) <= tolerance;
+        const matchesHeight = Math.abs(height - bounds.height) <= tolerance;
+        if (matchesX && matchesY && matchesWidth && matchesHeight) {
+            return true;
+        }
+    }
+    return false;
+}
+
+async function isFullscreenAppActive() {
+    const now = Date.now();
+    if (now - foregroundFullscreenCache.checkedAt < 3000 || fullscreenCheckInProgress) {
+        return foregroundFullscreenCache.value;
+    }
+
+    fullscreenCheckInProgress = true;
+    try {
+        const rect = await getForegroundWindowRect();
+        const processName = rect?.processName?.toLowerCase?.() ?? "";
+        const ignoredProcesses = new Set(["explorer", "shellexperiencehost", "searchhost", "startmenuexperiencehost", "aerial"]);
+        if (ignoredProcesses.has(processName)) {
+            foregroundFullscreenCache = {value: false, checkedAt: now};
+            return false;
+        }
+        const isFullscreen = isRectFullscreenOnAnyDisplay(rect);
+        foregroundFullscreenCache = {value: isFullscreen, checkedAt: now};
+        return isFullscreen;
+    } catch {
+        foregroundFullscreenCache = {value: false, checkedAt: now};
+        return false;
+    } finally {
+        fullscreenCheckInProgress = false;
+    }
+}
+
 //window creation code
 function createConfigWindow(argv) {
     let win = new BrowserWindow({
@@ -111,13 +362,38 @@ function createConfigWindow(argv) {
             sandbox: false,
             preload: path.join(__dirname, "preload.js")
         },
-        resizable: false,
+        resizable: true,
+        minimizable: true,
+        maximizable: true,
+        autoHideMenuBar: true,
+        minWidth: 980,
+        minHeight: 700,
         icon: path.join(__dirname, 'icon.ico')
     });
+    if (typeof win.removeMenu === "function") {
+        win.removeMenu();
+    } else {
+        win.setMenu(null);
+    }
+    win.setMenuBarVisibility(false);
     win.loadFile('web/config.html');
+    win.webContents.on('before-input-event', (event, input) => {
+        const key = String(input.key || "").toUpperCase();
+        const isDevToolsKey = input.type === 'keyDown' && (
+            key === 'F12' ||
+            (key === 'I' && input.control && input.shift)
+        );
+        if (isDevToolsKey) {
+            if (win.webContents.isDevToolsOpened()) {
+                win.webContents.closeDevTools();
+            } else {
+                win.webContents.openDevTools({mode: 'detach'});
+            }
+            event.preventDefault();
+        }
+    });
     win.on('closed', function () {
         win = null;
-        screens = [];
     });
     if (argv) {
         if (argv.includes("/dt")) {
@@ -135,7 +411,6 @@ function createConfigWindow(argv) {
         shell.openExternal(url);
         return {action: 'deny'};
     });
-    screens.push(win);
 }
 
 function createSSWindow(argv) {
@@ -151,6 +426,7 @@ function createSSWindow(argv) {
     allowedVideos = store.get("allowedVideos");
     calculateAstronomy();
     previouslyPlayed = [];
+    resetPlaybackHistory();
     let displays = screen.getAllDisplays();
     store.set('numDisplays', displays.length);
     for (let i = 0; i < displays.length; i++) {
@@ -208,6 +484,7 @@ function createSSPWindow(argv) {
     nq = true;
     allowedVideos = store.get("allowedVideos");
     previouslyPlayed = [];
+    resetPlaybackHistory();
     let displays = screen.getAllDisplays();
     let win = new BrowserWindow({
         width: 1280,
@@ -372,6 +649,7 @@ app.allowRendererProcessReuse = true
 app.whenReady().then(startUp);
 
 function startUp() {
+    Menu.setApplicationMenu(null);
     setRepositoryMetadata();
     //Uncomment the line below when compiling the .scr file
     //store.set('useTray', false);
@@ -385,6 +663,9 @@ function startUp() {
         if (!fs.existsSync(path.join(app.getPath('userData'), "videos", "temp"))) {
             fs.mkdirSync(path.join(app.getPath('userData'), "videos", "temp"));
         }
+        setUpConfigFile();
+    } else {
+        // Keep runtime metadata and merged catalog current even between releases.
         setUpConfigFile();
     }
     calculateAstronomy();
@@ -432,17 +713,20 @@ function startUp() {
 
 //loads the config file with the default setting if not set up already
 function setUpConfigFile() {
+    const catalog = syncVideoCatalog();
     //update video info
     if (!store.get('allowedVideos')) {
         let allowedVideos = [];
-        for (let i = 0; i < videos.length; i++) {
-            allowedVideos.push(videos[i].id);
+        for (let i = 0; i < catalog.length; i++) {
+            allowedVideos.push(catalog[i].id);
         }
         store.set('allowedVideos', allowedVideos);
     }
+    const knownVideoIds = new Set(catalog.map((video) => video.id));
+    store.set('allowedVideos', (store.get('allowedVideos') ?? []).filter((videoId) => typeof videoId === "string" && (videoId.startsWith("_") || knownVideoIds.has(videoId))));
+    store.set('alwaysDownloadVideos', (store.get('alwaysDownloadVideos') ?? []).filter((videoId) => knownVideoIds.has(videoId)));
+    store.set('neverDownloadVideos', (store.get('neverDownloadVideos') ?? []).filter((videoId) => knownVideoIds.has(videoId)));
     store.set('downloadedVideos', store.get('downloadedVideos') ?? []);
-    store.set('alwaysDownloadVideos', store.get('alwaysDownloadVideos') ?? []);
-    store.set('neverDownloadVideos', store.get('neverDownloadVideos') ?? []);
     store.set('videoProfiles', store.get('videoProfiles') ?? []);
     store.set('customVideos', store.get('customVideos') ?? []);
 
@@ -455,9 +739,11 @@ function setUpConfigFile() {
     store.set('lockAfterRun', store.get('lockAfterRun') ?? false);
     store.set('lockAfterRunAfter', store.get('lockAfterRunAfter') ?? 15);
     store.set('runOnBattery', store.get('runOnBattery') ?? true);
+    store.set('disableWhenFullscreenAppActive', store.get('disableWhenFullscreenAppActive') ?? true);
     store.set('updateAvailable', false);
     setRepositoryMetadata();
     store.set('debugPlayback', store.get('debugPlayback') ?? false);
+    store.set('configTheme', store.get('configTheme') ?? "dark");
     store.set('enableGlobalShortcut', store.get('enableGlobalShortcut') ?? true);
     store.set('globalShortcutModifier1', store.get('globalShortcutModifier1') ?? "Super");
     store.set('globalShortcutModifier2', store.get('globalShortcutModifier2') ?? "+Control");
@@ -466,6 +752,7 @@ function setUpConfigFile() {
     store.set('playbackSpeed', store.get('playbackSpeed') ?? 1);
     store.set('skipVideosWithKey', store.get('skipVideosWithKey') ?? true);
     store.set('skipKey', store.get('skipKey') ?? "ArrowRight");
+    store.set('previousSkipKey', store.get('previousSkipKey') ?? "ArrowLeft");
     store.set('avoidDuplicateVideos', store.get('avoidDuplicateVideos') ?? true);
     store.set('videoFilters', store.get('videoFilters') ?? [{
         name: 'blur',
@@ -502,6 +789,11 @@ function setUpConfigFile() {
     store.set('videoTransitionLength', store.get('videoTransitionLength') ?? 2000);
     store.set('fillMode', store.get('fillMode') ?? "stretch");
     store.set('videoFileType', store.get('videoFileType') ?? "H2641080p");
+    if (store.get('videoFileType') === "H2651080p") {
+        store.set('videoFileType', "HEVC1080p");
+    } else if (store.get('videoFileType') === "H2654k") {
+        store.set('videoFileType', "HEVC2160p");
+    }
     //1.2.0 changes the default transition length because of internal changes
     if (store.get('videoTransitionLength') === 1000) {
         store.set('videoTransitionLength', 2000);
@@ -621,13 +913,21 @@ ipcMain.on('quitApp', (event, arg) => {
 });
 
 ipcMain.on('keyPress', (event, key) => {
-    if (key === store.get('skipKey') && store.get('skipVideosWithKey')) {
-        for (let i = 0; i < screens.length; i++) {
-            screens[i].webContents.send('newVideo');
+    if (store.get('skipVideosWithKey')) {
+        if (key === store.get('skipKey')) {
+            for (let i = 0; i < screens.length; i++) {
+                screens[i].webContents.send('newVideo', 'next');
+            }
+            return;
         }
-    } else {
-        quitApp();
+        if (key === store.get('previousSkipKey')) {
+            for (let i = 0; i < screens.length; i++) {
+                screens[i].webContents.send('newVideo', 'previous');
+            }
+            return;
+        }
     }
+    quitApp();
 });
 
 ipcMain.on('updateCache', (event) => {
@@ -662,7 +962,8 @@ ipcMain.on('openConfigFolder', (event) => {
 });
 
 ipcMain.on('selectCustomLocation', async (event, arg) => {
-    const result = await dialog.showOpenDialog(screens[0], {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const result = await dialog.showOpenDialog(ownerWindow, {
         properties: ['openDirectory']
     });
     const path = result.filePaths[0];
@@ -680,7 +981,8 @@ ipcMain.on('selectCustomLocation', async (event, arg) => {
 });
 
 ipcMain.on('selectCacheLocation', async (event, arg) => {
-    const result = await dialog.showOpenDialog(screens[0], {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const result = await dialog.showOpenDialog(ownerWindow, {
         properties: ['openDirectory']
     });
     const newPath = result.filePaths[0];
@@ -714,7 +1016,8 @@ ipcMain.on('selectFile', async (event, args) => {
     const filters = {
         'image': {name: 'Image', extensions: ['jpg', 'jpeg', 'png', 'gif']}
     };
-    dialog.showOpenDialog(screens[0], {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
+    dialog.showOpenDialog(ownerWindow, {
         properties: ['openFile'],
         filters: [filters[type]]
     }).then(result => {
@@ -737,7 +1040,10 @@ ipcMain.on('openInfoEditor', (event) => {
 
 ipcMain.on('refreshConfig', (event) => {
     setUpConfigFile();
-    closeAllWindows();
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (senderWindow && !senderWindow.isDestroyed()) {
+        senderWindow.close();
+    }
     createConfigWindow();
 });
 
@@ -745,7 +1051,10 @@ ipcMain.on('resetConfig', (event) => {
     fs.unlink(`${app.getPath('userData')}/config.json`, err => {
     });
     setUpConfigFile();
-    closeAllWindows();
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (senderWindow && !senderWindow.isDestroyed()) {
+        senderWindow.close();
+    }
     createConfigWindow();
     //app.quit();
 });
@@ -759,18 +1068,41 @@ ipcMain.on('updateLocation', (event) => {
     }
 });
 
-ipcMain.handle('newVideoId', (event, lastPlayed) => {
+ipcMain.handle('newVideoId', (event, payload) => {
+    const request = typeof payload === "string" ? {lastPlayed: payload, direction: "next"} : (payload ?? {});
+    const lastPlayed = request.lastPlayed ?? "";
+    const direction = request.direction ?? "next";
+
     if (currentlyPlaying === '') {
         onFirstVideoPlayed();
+    }
+
+    if (direction === "previous") {
+        if (currentlyPlaying && lastPlayed !== currentlyPlaying) {
+            return currentlyPlaying;
+        }
+        const previous = getPreviousVideoFromHistory();
+        if (previous) {
+            currentlyPlaying = previous;
+            return currentlyPlaying;
+        }
+        return currentlyPlaying || lastPlayed;
     }
 
     function newId() {
         let id = "";
         if (store.get('timeOfDay')) {
             let time = getTimeOfDay();
-            id = tod[time][randomInt(0, tod[time].length)];
+            if (tod[time].length > 0) {
+                id = tod[time][randomInt(0, tod[time].length - 1)];
+            }
         } else {
-            id = allowedVideos[randomInt(0, allowedVideos.length)];
+            if (allowedVideos.length > 0) {
+                id = allowedVideos[randomInt(0, allowedVideos.length - 1)];
+            }
+        }
+        if (!id) {
+            return currentlyPlaying || "";
         }
         if (store.get('avoidDuplicateVideos') && allowedVideos.length > 6) {
             if (previouslyPlayed.includes(id)) {
@@ -791,6 +1123,7 @@ ipcMain.handle('newVideoId', (event, lastPlayed) => {
         }
     }
     currentlyPlaying = newId();
+    pushVideoToHistory(currentlyPlaying);
     return currentlyPlaying;
 })
 
@@ -853,6 +1186,7 @@ function setupGlobalShortcut() {
 function updateCustomVideos() {
     let allowedVideos = store.get('allowedVideos');
     let customVideos = store.get('customVideos');
+    const knownIds = new Set(getVideoCatalog().map((video) => video.id));
     for (let i = 0; i < allowedVideos.length; i++) {
         if (allowedVideos[i][0] === "_") {
             let index = customVideos.findIndex((e) => {
@@ -861,9 +1195,12 @@ function updateCustomVideos() {
                 }
             });
             if (index === -1) {
-                allowedVideos.splice(index, 1);
+                allowedVideos.splice(i, 1);
                 i--;
             }
+        } else if (!knownIds.has(allowedVideos[i])) {
+            allowedVideos.splice(i, 1);
+            i--;
         }
     }
     store.set('allowedVideos', allowedVideos);
@@ -915,20 +1252,28 @@ function downloadFile(file_url, targetPath, callback) {
 }
 
 function downloadVideos() {
+    const videos = getVideoCatalog();
     let allowedVideos = getVideosToDownload();
     let downloadedVideos = store.get('downloadedVideos') ?? [];
     let flag = false;
     for (let i = 0; i < allowedVideos.length; i++) {
         if (!downloadedVideos.includes(allowedVideos[i]) && allowedVideos[i][0] !== "_") {
-            let flag = true;
+            flag = true;
             let index = videos.findIndex((v) => {
                 if (allowedVideos[i] === v.id) {
                     return true;
                 }
             });
+            if (index === -1) {
+                continue;
+            }
+            const videoSource = getVideoSource(videos[index]);
+            if (!videoSource) {
+                continue;
+            }
             //console.log(allowedVideos[i]);
             //console.log(`Downloading ${videos[index].name}`);
-            downloadFile(videos[index].src[store.get('videoFileType')], `${cachePath}/temp/${allowedVideos[i]}.mov`, () => {
+            downloadFile(videoSource, `${cachePath}/temp/${allowedVideos[i]}.mov`, () => {
                 fs.copyFileSync(`${cachePath}/temp/${allowedVideos[i]}.mov`, `${cachePath}/${allowedVideos[i]}.mov`);
                 fs.unlink(`${cachePath}/temp/${allowedVideos[i]}.mov`, (err) => {
                 });
@@ -958,7 +1303,7 @@ function getVideosToDownload() {
     });
     store.get('neverDownloadVideos').forEach(e => {
         if (allowedVideos.includes(e)) {
-            allowedVideos = allowedVideos.splice(allowedVideos.indexOf(e), 1);
+            allowedVideos.splice(allowedVideos.indexOf(e), 1);
         }
     });
     return allowedVideos;
@@ -966,6 +1311,9 @@ function getVideosToDownload() {
 
 //cache functions
 function getAllFilesInCache() {
+    if (!fs.existsSync(cachePath)) {
+        return [];
+    }
     return fs.readdirSync(cachePath);
 }
 
@@ -1018,6 +1366,12 @@ function removeAllNeverAllowedVideosInCache() {
 function updateVideoCache(callback) {
     let videoList = [];
     fs.readdir(cachePath, (err, files) => {
+        if (err || !files) {
+            if (callback) {
+                callback();
+            }
+            return;
+        }
         files.forEach(file => {
             if (file.includes('.mov')) {
                 videoList.push(file.slice(0, file.length - 4));
@@ -1060,6 +1414,7 @@ function quitApp() {
         }
         closeAllWindows();
         currentlyPlaying = '';
+        resetPlaybackHistory();
     }
 }
 
@@ -1089,23 +1444,38 @@ function lockComputer() {
 }
 
 //idle startup timer
-function launchScreensaver() {
+async function launchScreensaver() {
+    if (launchScreensaverBusy) {
+        return;
+    }
+    launchScreensaverBusy = true;
     let startAfter = store.get('startAfter');
-    //console.log(screens.length,powerMonitor.getSystemIdleTime(),store.get('startAfter') * 60)
-    if (screens.length === 0 && !suspend && !isComputerSleeping && !isComputerSuspendedOrLocked && startAfter > 0) {
-        //let idleTime = powerMonitor.getSystemIdleTime();
-        if (powerMonitor.getSystemIdleState(startAfter * 60) === "idle" && getWakeLock()) {
-            if (!store.get("runOnBattery")) {
-                if (powerMonitor.isOnBatteryPower()) {
+    try {
+        //console.log(screens.length,powerMonitor.getSystemIdleTime(),store.get('startAfter') * 60)
+        if (screens.length === 0 && !suspend && !isComputerSleeping && !isComputerSuspendedOrLocked && startAfter > 0) {
+            //let idleTime = powerMonitor.getSystemIdleTime();
+            if (powerMonitor.getSystemIdleState(startAfter * 60) === "idle" && getWakeLock()) {
+                if (!store.get("runOnBattery")) {
+                    if (powerMonitor.isOnBatteryPower()) {
+                        return;
+                    }
+                }
+                if (store.get("disableWhenFullscreenAppActive") && await isFullscreenAppActive()) {
                     return;
                 }
+                createSSWindow();
             }
-            createSSWindow();
         }
+    } finally {
+        launchScreensaverBusy = false;
     }
 }
 
-setInterval(launchScreensaver, 5000);
+setInterval(() => {
+    launchScreensaver().catch((error) => {
+        console.log("launchScreensaver error", error);
+    });
+}, 5000);
 
 function onFirstVideoPlayed() {
     let startTime = new Date();
@@ -1137,7 +1507,9 @@ function blankScreensaver() {
 
 //Time of day code functions
 function setTimeOfDayList() {
+    tod = {"day": [], "night": [], "none": []};
     if (store.get('timeOfDay')) {
+        const videos = getVideoCatalog();
         for (let i = 0; i < allowedVideos.length; i++) {
             let index = videos.findIndex((e) => {
                 if (allowedVideos[i] === e.id) {
@@ -1216,5 +1588,5 @@ function getWakeLock() {
 
 //helper functions
 function randomInt(min, max) {
-    return Math.floor(Math.random() * max) - min;
+    return Math.floor(Math.random() * (max - min + 1)) + min;
 }

@@ -1,19 +1,48 @@
 //Global variables
 //This list of allowed or 'checked' videos
-const videos = electron.videos;
+const bundledVideos = electron.bundledVideos ?? electron.videos;
+let videos = electron.store.get("videoCatalog") ?? electron.videos;
 let allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
 let alwaysDownloadVideos = electron.store.get("alwaysDownloadVideos");
 let neverDownloadVideos = electron.store.get("neverDownloadVideos");
 let customVideos = electron.store.get("customVideos");
+let extraVideos = electron.store.get("extraVideos") ?? [];
+refreshVideoCatalog();
+
+function refreshVideoCatalog() {
+    const validExtraVideos = [];
+    const seenExtraIds = new Set();
+    for (const candidate of extraVideos) {
+        const sanitized = sanitizeExtraVideo(candidate);
+        if (!sanitized || seenExtraIds.has(sanitized.id)) {
+            continue;
+        }
+        seenExtraIds.add(sanitized.id);
+        validExtraVideos.push(sanitized);
+    }
+    extraVideos = validExtraVideos;
+    electron.store.set("extraVideos", extraVideos);
+
+    const merged = [...bundledVideos];
+    const seenIds = new Set(merged.map((video) => video.id));
+    for (const extra of extraVideos) {
+        if (!seenIds.has(extra.id)) {
+            merged.push(extra);
+            seenIds.add(extra.id);
+        }
+    }
+    electron.store.set("videoCatalog", merged);
+    videos = merged;
+}
 
 //Updates all the <input> tags with their proper values. Called on page load
 function displaySettings() {
-    let checked = ["timeOfDay", "skipVideosWithKey", "sameVideoOnScreens", "videoCache", "videoCacheProfiles", "videoCacheRemoveUnallowed", "avoidDuplicateVideos", "onlyShowVideoOnPrimaryMonitor", "videoQuality", "immediatelyUpdateVideoCache", "useTray", "blankScreen", "sleepAfterBlank", "lockAfterRun", "alternateRenderMethod", "useLocationForSunrise", "runOnBattery", "enableGlobalShortcut"];
+    let checked = ["timeOfDay", "skipVideosWithKey", "sameVideoOnScreens", "videoCache", "videoCacheProfiles", "videoCacheRemoveUnallowed", "avoidDuplicateVideos", "onlyShowVideoOnPrimaryMonitor", "videoQuality", "immediatelyUpdateVideoCache", "useTray", "blankScreen", "sleepAfterBlank", "lockAfterRun", "alternateRenderMethod", "useLocationForSunrise", "runOnBattery", "disableWhenFullscreenAppActive", "enableGlobalShortcut"];
     for (let i = 0; i < checked.length; i++) {
         $(`#${checked[i]}`).prop('checked', electron.store.get(checked[i]));
     }
-    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textColor", "startAfter", "blankAfter", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
+    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textColor", "startAfter", "blankAfter", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "previousSkipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
     for (let i = 0; i < numTxt.length; i++) {
         $(`#${numTxt[i]}`).val(electron.store.get(numTxt[i]));
     }
@@ -30,7 +59,9 @@ function displaySettings() {
     for (let i = 0; i < staticText.length; i++) {
         $(`#${staticText[i]}`).text(electron.store.get(staticText[i]));
     }
+    applyTheme(electron.store.get("configTheme") ?? "dark");
     bindAboutLinks();
+    displayExtraVideos();
     displayPlaybackSettings();
     displayCustomVideos();
     colorTextPositionRadio();
@@ -45,6 +76,23 @@ function displaySettings() {
 }
 
 displaySettings();
+
+function applyTheme(theme) {
+    const normalized = theme === "light" ? "light" : "dark";
+    document.body.setAttribute("data-theme", normalized);
+    electron.store.set("configTheme", normalized);
+    const themeToggle = document.getElementById("themeToggle");
+    if (themeToggle) {
+        themeToggle.innerHTML = normalized === "dark"
+            ? `<i class="fa fa-sun"></i> Light`
+            : `<i class="fa fa-moon"></i> Dark`;
+    }
+}
+
+function toggleTheme() {
+    const currentTheme = document.body.getAttribute("data-theme") ?? "dark";
+    applyTheme(currentTheme === "dark" ? "light" : "dark");
+}
 
 function bindAboutLinks() {
     const repositoryUrl = electron.store.get("repositoryUrl");
@@ -70,6 +118,167 @@ function bindAboutLinks() {
             }
         }
     }
+}
+
+function getVideoSource(videoInfo) {
+    if (!videoInfo || !videoInfo.src) {
+        return undefined;
+    }
+    const preferredType = electron.store.get('videoFileType');
+    const aliases = {
+        H2651080p: "HEVC1080p",
+        H2654k: "HEVC2160p",
+        HEVC1080p: "H2651080p",
+        HEVC2160p: "H2654k"
+    };
+    const preferredCandidates = [preferredType, aliases[preferredType]].filter(Boolean);
+    for (const preferredCandidate of preferredCandidates) {
+        if (videoInfo.src[preferredCandidate]) {
+            return videoInfo.src[preferredCandidate];
+        }
+    }
+    const fallbackOrder = ["H2641080p", "HEVC1080p", "H2651080p", "HEVC2160p", "H2654k"];
+    for (const type of fallbackOrder) {
+        if (videoInfo.src[type]) {
+            return videoInfo.src[type];
+        }
+    }
+    for (const value of Object.values(videoInfo.src)) {
+        if (typeof value === "string" && value.length > 0) {
+            return value;
+        }
+    }
+    return undefined;
+}
+
+function showJsonVideoEditor() {
+    const template = {
+        id: "example-video-id",
+        name: "Example Video",
+        accessibilityLabel: "User Added",
+        type: "landscape",
+        timeOfDay: "none",
+        src: {
+            H2641080p: "https://example.com/video.mov"
+        }
+    };
+    $('#jsonVideoInput').val(JSON.stringify(template, null, 2));
+    document.getElementById('addJsonVideo').style.display = 'block';
+}
+
+function sanitizeExtraVideo(video) {
+    if (!video || typeof video !== "object") {
+        return null;
+    }
+    if (typeof video.id !== "string" || video.id.trim().length === 0 || video.id.startsWith("_")) {
+        return null;
+    }
+    if (!video.src || typeof video.src !== "object") {
+        return null;
+    }
+    const src = {};
+    Object.keys(video.src).forEach((key) => {
+        if (typeof video.src[key] === "string" && video.src[key].trim().length > 0) {
+            src[key] = video.src[key].trim();
+        }
+    });
+    if (Object.keys(src).length === 0) {
+        return null;
+    }
+    return {
+        ...video,
+        id: video.id.trim(),
+        name: video.name ? String(video.name).trim() : undefined,
+        accessibilityLabel: video.accessibilityLabel ? String(video.accessibilityLabel).trim() : (video.name ? String(video.name).trim() : video.id.trim()),
+        type: video.type ? String(video.type).trim() : "landscape",
+        timeOfDay: video.timeOfDay ? String(video.timeOfDay).trim() : "none",
+        src,
+        userAdded: true
+    };
+}
+
+function saveJsonVideoFromModal() {
+    let parsed;
+    const raw = $('#jsonVideoInput').val().trim();
+    if (!raw) {
+        alert("Paste a JSON object or array first.");
+        return;
+    }
+    try {
+        parsed = JSON.parse(raw);
+    } catch (error) {
+        alert(`Invalid JSON: ${error.message}`);
+        return;
+    }
+    const incoming = Array.isArray(parsed) ? parsed : [parsed];
+    const existingIds = new Set(videos.map((video) => video.id));
+    const newVideos = [];
+    for (const item of incoming) {
+        const sanitized = sanitizeExtraVideo(item);
+        if (!sanitized) {
+            continue;
+        }
+        if (existingIds.has(sanitized.id)) {
+            continue;
+        }
+        existingIds.add(sanitized.id);
+        newVideos.push(sanitized);
+    }
+    if (newVideos.length === 0) {
+        alert("No valid new videos were found. Ensure each item has a unique `id` and a non-empty `src` map.");
+        return;
+    }
+    extraVideos = [...extraVideos, ...newVideos];
+    electron.store.set("extraVideos", extraVideos);
+
+    if ($('#jsonVideoAutoSelect').is(':checked')) {
+        for (const video of newVideos) {
+            if (!allowedVideos.includes(video.id)) {
+                allowedVideos.push(video.id);
+            }
+        }
+        electron.store.set("allowedVideos", allowedVideos);
+    }
+
+    refreshVideoCatalog();
+    makeList();
+    displayExtraVideos();
+    refreshCache();
+    document.getElementById('addJsonVideo').style.display = 'none';
+}
+
+function removeExtraVideo(videoId) {
+    extraVideos = extraVideos.filter((video) => video.id !== videoId);
+    allowedVideos = allowedVideos.filter((id) => id !== videoId);
+    alwaysDownloadVideos = alwaysDownloadVideos.filter((id) => id !== videoId);
+    neverDownloadVideos = neverDownloadVideos.filter((id) => id !== videoId);
+    electron.store.set("extraVideos", extraVideos);
+    electron.store.set("allowedVideos", allowedVideos);
+    electron.store.set("alwaysDownloadVideos", alwaysDownloadVideos);
+    electron.store.set("neverDownloadVideos", neverDownloadVideos);
+    refreshVideoCatalog();
+    makeList();
+    selectVideo(-1);
+    displayExtraVideos();
+    refreshCache();
+}
+
+function displayExtraVideos() {
+    extraVideos = electron.store.get("extraVideos") ?? [];
+    let html = "<table class='w3-table-all'>";
+    if (extraVideos.length === 0) {
+        html += "<tr><td class='w3-small'>No user JSON videos added yet.</td></tr>";
+    } else {
+        for (const video of extraVideos) {
+            const safeId = String(video.id).replace(/'/g, "\\'");
+            html += `<tr>
+                    <td>${video.name ?? video.id}<br><span class="w3-small">${video.id}</span></td>
+                    <td style="width: 40px"><i class='fa fa-times w3-large' style='color: #f44336' onclick="removeExtraVideo('${safeId}')"></i></td>
+                </tr>`;
+        }
+    }
+    html += "</table>";
+    $('#jsonVideoList').html(html);
 }
 
 function displayPlaybackSettings() {
@@ -269,6 +478,12 @@ skipKeyInput.addEventListener('keyup', (e) => {
     updateSetting('skipKey', 'text');
 });
 
+let previousSkipKeyInput = document.getElementById('previousSkipKey');
+previousSkipKeyInput.addEventListener('keyup', (e) => {
+    previousSkipKeyInput.value = e.code;
+    updateSetting('previousSkipKey', 'text');
+});
+
 let globalShortcutKeyInput = document.getElementById('globalShortcutKey');
 globalShortcutKeyInput.addEventListener('keyup', (e) => {
     let key = e.key;
@@ -432,7 +647,7 @@ function lineSelect(position, line) {
     let displayTextSettings = electron.store.get('displayText')[position][line];
     document.getElementById("textWidthSelect").setAttribute('onchange', `updateTextSetting(this, '${position}','${line}', 'maxWidth')`);
     $('#textWidthSelect').val(displayTextSettings.maxWidth ? displayTextSettings.maxWidth : "50%");
-    $('#textWidthContainer').css('display', "");
+    $('#textWidthContainer').css('display', "inline-flex");
 
     $('#positionLineNum0').css("font-weight", "normal");
     $('#positionLineNum1').css("font-weight", "normal");
@@ -452,42 +667,70 @@ function lineSelect(position, line) {
 
 function updatePositionType(position, line) {
     let displayTextSettings = electron.store.get('displayText');
+    const attrEscape = (value) => String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/</g, "&lt;");
+    const textEscape = (value) => String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;");
     displayTextSettings[position][line].type = $('#positionTypeSelect' + line).val();
+    const activeLine = displayTextSettings[position][line];
     let html = "";
-    switch (displayTextSettings[position][line].type) {
+    switch (activeLine.type) {
         case "none":
             html = "";
             break;
         case "text":
-            html = `<label>Text</label><input class='w3-input' value='${displayTextSettings[position][line].text ? displayTextSettings[position][line].text : ""}' onchange="updateTextSetting(this, '${position}','${line}', 'text')">`;
+            html = `<div class="positionDetailsPanel">
+                        <div class="positionField">
+                            <label for="positionTextValue">Text</label>
+                            <input id="positionTextValue" class="w3-input positionInputMedium" value="${attrEscape(activeLine.text)}" onchange="updateTextSetting(this, '${position}','${line}', 'text')">
+                        </div>
+                    </div>`;
             break;
         case "html":
-            html = `<label>HTML</label><br><textarea onchange="updateTextSetting(this, '${position}','${line}', 'html')" cols="75" rows="7">${displayTextSettings[position][line].html ? displayTextSettings[position][line].html : ""}</textarea>`;
+            html = `<div class="positionDetailsPanel">
+                        <div class="positionField">
+                            <label for="positionHtmlValue">HTML</label>
+                            <textarea id="positionHtmlValue" class="w3-input positionTextarea" onchange="updateTextSetting(this, '${position}','${line}', 'html')" rows="7">${textEscape(activeLine.html)}</textarea>
+                        </div>
+                    </div>`;
             break;
         case "image":
-            html = `<button onclick="electron.ipcRenderer.send('selectFile',['image','${position}','${line}'])">Select Image</button>
-                    <br>File: <span id="imageFileName">${displayTextSettings[position][line].imagePath}</span>
-                    <br><br>
-                    <label>Width: </label><input class='w3-input' style="width: 20%; display: inline !important;" value='${displayTextSettings[position][line].imageWidth ? displayTextSettings[position][line].imageWidth : ""}' onchange="updateTextSetting(this, '${position}','${line}', 'imageWidth')">
-                    <br>`;
+            html = `<div class="positionDetailsPanel">
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="electron.ipcRenderer.send('selectFile',['image','${position}','${line}'])">Select Image</button>
+                        <p class="w3-small positionMetaText">File: <span id="imageFileName">${textEscape(activeLine.imagePath)}</span></p>
+                        <div class="positionInlineRow">
+                            <label for="positionImageWidth">Width</label>
+                            <input id="positionImageWidth" class="w3-input positionInputTiny" value="${attrEscape(activeLine.imageWidth)}" onchange="updateTextSetting(this, '${position}','${line}', 'imageWidth')">
+                        </div>
+                    </div>`;
             break;
         case "time":
-            displayTextSettings[position][line].timeString = displayTextSettings[position][line].timeString ? displayTextSettings[position][line].timeString : "hh:mm:ss";
-            html = `
-                                    <input class='w3-input' value='${displayTextSettings[position][line].timeString}' onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}','${line}', 'timeString')">
-                                    <span id="positionTimeDisplay">${moment().format(displayTextSettings[position][line].timeString)}</span>
-                                    <br>
-                                    <button onclick="document.getElementById('timeFormatExplain').style.display='block'" class="w3-button w3-white w3-border w3-border-blue w3-round-large" style="margin-top: 2%">Show Formatting Details</button>`;
+            activeLine.timeString = activeLine.timeString || "hh:mm:ss";
+            html = `<div class="positionDetailsPanel">
+                        <div class="positionField">
+                            <label for="positionTimeFormat">Time Format</label>
+                            <input id="positionTimeFormat" class="w3-input positionInputMedium" value="${attrEscape(activeLine.timeString)}" onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}','${line}', 'timeString')">
+                            <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.timeString)}</span>
+                        </div>
+                        <button onclick="document.getElementById('timeFormatExplain').style.display='block'" class="w3-button w3-white w3-border w3-border-blue w3-round-large positionHelpAction">Show Formatting Details</button>
+                    </div>`;
             break;
         case "information":
-            displayTextSettings[position][line].infoType = displayTextSettings[position][line].infoType || "accessibilityLabel";
-            let selected = displayTextSettings[position][line].infoType ? displayTextSettings[position][line].infoType : "";
-            html = `<br><label>Type </label>
-                                        <select onchange="updateTextSetting(this, '${position}', '${line}','infoType')">
-                                        <option value="accessibilityLabel" ${selected === "accessibilityLabel" ? "selected" : ""}>Label</option>
-                                        <option value="name" ${selected === "name" ? "selected" : ""}>Video Name</option>
-                                        ${position !== "random" ? `<option value="poi" ${selected === "poi" ? "selected" : ""}>Location Information</option>` : ""}
-                                        </select><br>`;
+            activeLine.infoType = activeLine.infoType || "accessibilityLabel";
+            html = `<div class="positionDetailsPanel">
+                        <div class="positionInlineRow">
+                            <label for="positionInfoType">Type</label>
+                            <select id="positionInfoType" class="positionInputMedium" onchange="updateTextSetting(this, '${position}', '${line}','infoType')">
+                                <option value="accessibilityLabel" ${activeLine.infoType === "accessibilityLabel" ? "selected" : ""}>Label</option>
+                                <option value="name" ${activeLine.infoType === "name" ? "selected" : ""}>Video Name</option>
+                                ${position !== "random" ? `<option value="poi" ${activeLine.infoType === "poi" ? "selected" : ""}>Location Information</option>` : ""}
+                            </select>
+                        </div>
+                    </div>`;
             break;
         case "astronomy":
             if (document.getElementById('latitude').value === "" || document.getElementById('longitude').value === "") {
@@ -496,47 +739,72 @@ function updatePositionType(position, line) {
                 $('#positionTypeSelect' + line).val("none");
                 break;
             }
-            displayTextSettings[position][line].astronomy = displayTextSettings[position][line].astronomy || "sunrise/set";
-            displayTextSettings[position][line].astroTimeString = displayTextSettings[position][line].astroTimeString || "hh:mm"
-            let astroType = displayTextSettings[position][line].astronomy ? displayTextSettings[position][line].astronomy : "";
-            html = `<br><label>Type </label>
-                   <select onchange="updateTextSetting(this, '${position}','${line}', 'astronomy')">
-                       <option value="sunrise/set" ${astroType === "sunrise/set" ? "selected" : ""}>Sunrise/Sunset</option>
-                       <option value="moonrise/set" ${astroType === "moonrise/set" ? "selected" : ""}>Moonrise/Moonset</option>
-                       <option value="sunrise" ${astroType === "sunrise" ? "selected" : ""}>Sunrise</option>
-                       <option value="sunset" ${astroType === "sunset" ? "selected" : ""}>Sunset</option>
-                       <option value="moonrise" ${astroType === "moonrise" ? "selected" : ""}>Moonrise</option>
-                       <option value="moonset" ${astroType === "moonset" ? "selected" : ""}>Moonset</option>
-                   </select>
-                   <br><br>
-                   <input class='w3-input'  style="width: 15%" value='${displayTextSettings[position][line].astroTimeString}' onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}', '${line}','astroTimeString')">
-                
-                   <span id="positionTimeDisplay" style="margin-left: .5%; line-height: 2.5;">${moment().format(displayTextSettings[position][line].astroTimeString)}</span>
-                   <button onclick="document.getElementById('timeFormatExplain').style.display='block'" class="w3-button w3-white w3-border w3-border-blue w3-round-large" style="margin-top: -6%; margin-left: 10%;">Show Formatting Details</button>
-                   <br>            
-            `;
-            showMomentDisplay('positionTimeDisplay', this);
+            activeLine.astronomy = activeLine.astronomy || "sunrise/set";
+            activeLine.astroTimeString = activeLine.astroTimeString || "hh:mm";
+            html = `<div class="positionDetailsPanel">
+                        <div class="positionInlineRow">
+                            <label for="positionAstronomyType">Type</label>
+                            <select id="positionAstronomyType" class="positionInputMedium" onchange="updateTextSetting(this, '${position}','${line}', 'astronomy')">
+                                <option value="sunrise/set" ${activeLine.astronomy === "sunrise/set" ? "selected" : ""}>Sunrise/Sunset</option>
+                                <option value="moonrise/set" ${activeLine.astronomy === "moonrise/set" ? "selected" : ""}>Moonrise/Moonset</option>
+                                <option value="sunrise" ${activeLine.astronomy === "sunrise" ? "selected" : ""}>Sunrise</option>
+                                <option value="sunset" ${activeLine.astronomy === "sunset" ? "selected" : ""}>Sunset</option>
+                                <option value="moonrise" ${activeLine.astronomy === "moonrise" ? "selected" : ""}>Moonrise</option>
+                                <option value="moonset" ${activeLine.astronomy === "moonset" ? "selected" : ""}>Moonset</option>
+                            </select>
+                        </div>
+                        <div class="positionInlineRow">
+                            <label for="positionAstroFormat">Time Format</label>
+                            <input id="positionAstroFormat" class="w3-input positionInputTiny" value="${attrEscape(activeLine.astroTimeString)}" onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}', '${line}','astroTimeString')">
+                            <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.astroTimeString)}</span>
+                        </div>
+                        <button onclick="document.getElementById('timeFormatExplain').style.display='block'" class="w3-button w3-white w3-border w3-border-blue w3-round-large positionHelpAction">Show Formatting Details</button>
+                    </div>`;
             break;
     }
-    if (displayTextSettings[position][line].type !== "none") {
-        html += `<br><input type="checkbox" class="w3-check" id="useDefaultFont" onchange="updateTextSettingCheck(this, '${position}','${line}', 'defaultFont'); updatePositionType('${position}','${line}');" ${displayTextSettings[position][line].defaultFont ? 'checked' : ''}><label> Use Default Font</label>`;
-        html += `<div style="text-align: right; margin-top: -4%">Custom CSS <input id="customCSS" onchange="updateTextSetting(this, '${position}','${line}', 'customCSS')" value="${displayTextSettings[position][line].customCSS ?? ''}"/></div>`;
-        if (!displayTextSettings[position][line].defaultFont) {
-            displayTextSettings[position][line]['font'] = displayTextSettings[position][line].font ? displayTextSettings[position][line].font : electron.store.get('textFont');
-            displayTextSettings[position][line]['fontSize'] = displayTextSettings[position][line].fontSize ? displayTextSettings[position][line].fontSize : electron.store.get('textSize');
-            displayTextSettings[position][line]['fontColor'] = displayTextSettings[position][line].fontColor ? displayTextSettings[position][line].fontColor : electron.store.get('textColor');
-            html += `<div class="autocomplete" style="width:300px;">
-                    <label>Font: </label><input id="positionFont" type="text" onchange="updateTextSetting(this, '${position}','${line}', 'font')" value="${displayTextSettings[position][line]['font']}">
+    if (activeLine.type !== "none") {
+        html += `<hr class="positionDetailsDivider">
+                <div class="positionFooterRow">
+                    <label for="useDefaultFont" class="positionCheckboxRow">
+                        <input type="checkbox" class="w3-check" id="useDefaultFont" onchange="updateTextSettingCheck(this, '${position}','${line}', 'defaultFont'); updatePositionType('${position}','${line}');" ${activeLine.defaultFont ? 'checked' : ''}>
+                        <span>Use Default Font</span>
+                    </label>
+                    <div class="positionCustomCssRow">
+                        <label for="customCSS">Custom CSS</label>
+                        <input id="customCSS" class="w3-input positionInputMedium" onchange="updateTextSetting(this, '${position}','${line}', 'customCSS')" value="${attrEscape(activeLine.customCSS)}"/>
                     </div>
-                    <label>Font Size: </label><input class="w3-input" id="positionTextSize" type="number" step=".25" style="width: 10%; display: inline; margin-top: 2%" onchange="updateTextSetting(this, '${position}','${line}', 'fontSize')" value="${displayTextSettings[position][line]['fontSize']}">
-                    <label>Color: </label><input class="w3-input" type="color" step=".25" style="width: 5%; display: inline; margin-top: 2%; padding: 0;" onchange="updateTextSetting(this, '${position}','${line}', 'fontColor')" value="${displayTextSettings[position][line]['fontColor']}">`;
-            $('#positionDetails').html(html);
+                </div>`;
+        if (!activeLine.defaultFont) {
+            activeLine.font = activeLine.font || electron.store.get('textFont');
+            activeLine.fontSize = activeLine.fontSize || electron.store.get('textSize');
+            activeLine.fontColor = activeLine.fontColor || electron.store.get('textColor');
+            html += `<div class="positionFontControls">
+                        <div class="autocomplete positionFontAutocomplete">
+                            <label for="positionFont">Font</label>
+                            <input id="positionFont" class="w3-input" type="text" onchange="updateTextSetting(this, '${position}','${line}', 'font')" value="${attrEscape(activeLine.font)}">
+                        </div>
+                        <div class="positionInlineRow">
+                            <label for="positionTextSize">Font Size</label>
+                            <input class="w3-input positionInputTiny" id="positionTextSize" type="number" step=".25" onchange="updateTextSetting(this, '${position}','${line}', 'fontSize')" value="${attrEscape(activeLine.fontSize)}">
+                            <label for="positionTextColor">Color</label>
+                            <input id="positionTextColor" class="w3-input positionColorInput" type="color" step=".25" onchange="updateTextSetting(this, '${position}','${line}', 'fontColor')" value="${attrEscape(activeLine.fontColor)}">
+                        </div>
+                    </div>`;
+        }
+
+        $('#positionDetails').html(html);
+        if (!activeLine.defaultFont) {
             autocomplete(document.getElementById('positionFont'), fontList, (e) => {
                 updateTextSetting(e, position, line, 'font')
             });
-        } else {
-            $('#positionDetails').html(html);
-            $('#textWidthContainer').css('display', "");
+        }
+        $('#textWidthContainer').css('display', "inline-flex");
+
+        if (activeLine.type === "astronomy") {
+            const astroInput = document.getElementById("positionAstroFormat");
+            if (astroInput) {
+                showMomentDisplay('positionTimeDisplay', astroInput);
+            }
         }
     } else {
         $('#positionDetails').html(html);
@@ -583,30 +851,32 @@ function changeTab(evt, tab) {
 
 //Functions to run the side menus
 function selectSetting(item) {
-    let list = document.getElementsByClassName("settingsListItem");
-    for (i = 0; i < list.length; i++) {
+    const settingsTab = document.getElementById("settingsTab");
+    let list = settingsTab.getElementsByClassName("settingsListItem");
+    for (let i = 0; i < list.length; i++) {
         list[i].className = list[i].className.replace("w3-deep-orange", "");
     }
     if (item !== "general") {
         document.getElementById(`settingsList-${item}`).className += " w3-deep-orange";
     }
-    let cards = document.getElementsByClassName("settingsCard");
-    for (i = 0; i < cards.length; i++) {
+    let cards = settingsTab.getElementsByClassName("settingsCard");
+    for (let i = 0; i < cards.length; i++) {
         cards[i].style.display = "none";
     }
     document.getElementById(`${item}Settings`).style.display = "";
 }
 
 function selectTextSetting(item) {
-    let list = document.getElementsByClassName("textSettingsListItem");
-    for (i = 0; i < list.length; i++) {
+    const textTab = document.getElementById("textTab");
+    let list = textTab.getElementsByClassName("textSettingsListItem");
+    for (let i = 0; i < list.length; i++) {
         list[i].className = list[i].className.replace("w3-deep-orange", "");
     }
     if (item !== "general") {
         document.getElementById(`textSettingsList-${item}`).className += " w3-deep-orange";
     }
-    let cards = document.getElementsByClassName("textSettingsCard");
-    for (i = 0; i < cards.length; i++) {
+    let cards = textTab.getElementsByClassName("textSettingsCard");
+    for (let i = 0; i < cards.length; i++) {
         cards[i].style.display = "none";
     }
     document.getElementById(`${item}TextSettings`).style.display = "";
@@ -616,17 +886,19 @@ function selectTextSetting(item) {
 
 //Makes and then displays the videos on the sidebar
 function makeList() {
-    let videoList = "<a onclick=\"selectVideo(-1)\"><h3 class=\"w3-bar-item videoListItem\" id='videoListTitle'><i class=\"fa fa-film\"></i> Videos</h3></a>";
+    let videoList = "<div class='videoListTitleLink'><h3 class=\"w3-bar-item videoListTitle sidebarHeader\"><i class=\"fa fa-film\"></i> Videos</h3></div>";
     let headertxt = "";
     for (let i = 0; i < videos.length; i++) {
         if (headertxt !== videos[i].accessibilityLabel) {
-            videoList += `<h5 class="w3-bar-item videoListItem" id='videoListTitle'>${videos[i].accessibilityLabel}</h5>`;
+            videoList += `<h5 class="w3-bar-item videoListSectionTitle">${videos[i].accessibilityLabel}</h5>`;
             headertxt = videos[i].accessibilityLabel;
         }
-        videoList += `<span style="padding-left: 8%; font-size: small"><input type="checkbox" ${allowedVideos.includes(videos[i].id) ? "checked" : ""} class="w3-check" onclick="checkVideo(event,${i})">
-                      <a style="display: inline;" href="#" id="videoList-${i}" onclick="selectVideo(${i})" class="w3-bar-item w3-button videoListItem">
-                      ${videos[i].name ? videos[i].name : videos[i].accessibilityLabel}
-                      </a></span><br>`;
+        videoList += `<div class="videoListRow">
+                        <input type="checkbox" ${allowedVideos.includes(videos[i].id) ? "checked" : ""} class="w3-check videoListCheck" onclick="checkVideo(event,${i})">
+                        <a href="#" id="videoList-${i}" onclick="selectVideo(${i}); return false;" class="videoListEntry">
+                        ${videos[i].name ? videos[i].name : videos[i].accessibilityLabel}
+                        </a>
+                      </div>`;
     }
     videoList += "<br>";
     $('#videoList').html(videoList);
@@ -639,18 +911,29 @@ $(document).ready(() => {
 
 //Shows further info when you click on a video
 function selectVideo(index) {
-    let x = document.getElementsByClassName("videoListItem");
+    let x = document.getElementsByClassName("videoListEntry");
     for (i = 0; i < x.length; i++) {
-        x[i].className = x[i].className.replace("w3-deep-orange", "");
+        x[i].className = x[i].className.replace(" videoListEntryActive", "");
     }
     if (index > -1) {
-        downloadedVideos = electron.store.get("downloadedVideos");
-        document.getElementById("videoList-" + index).className += " w3-deep-orange";
-        let videoSRC = videos[index].src[electron.store.get('videoFileType')];
-        if (downloadedVideos.includes(videos[index].id)) {
+        downloadedVideos = electron.store.get("downloadedVideos") ?? [];
+        document.getElementById("videoList-" + index).className += " videoListEntryActive";
+        const hasDownloadedCopy = downloadedVideos.includes(videos[index].id);
+        let videoSRC = getVideoSource(videos[index]);
+        if (hasDownloadedCopy) {
             videoSRC = `${electron.store.get('cachePath')}/${videos[index].id}.mov`;
         }
-        $('#videoPlayer').attr("src", videoSRC).show();
+        const hasVideoSource = typeof videoSRC === "string" && videoSRC.length > 0;
+        const player = document.getElementById("videoPlayer");
+        if (hasVideoSource) {
+            player.src = videoSRC;
+            $('#videoPlayer').show();
+        } else {
+            player.pause();
+            player.removeAttribute("src");
+            player.load();
+            $('#videoPlayer').hide();
+        }
         $('#videoName').text(videos[index].accessibilityLabel);
         let videoDownloadState = "whenChecked";
         if (alwaysDownloadVideos.includes(videos[index].id)) {
@@ -658,7 +941,13 @@ function selectVideo(index) {
         } else if (neverDownloadVideos.includes(videos[index].id)) {
             videoDownloadState = "never";
         }
-        $('#videoInfo').html(`${downloadedVideos.includes(videos[index].id) ? "<p class='w3-large'><i class='far fa-check-circle' style='color: #4CAF50'></i> Downloaded</p>" : "<p class='w3-large'><i class='far fa-times-circle' style='color: #f44336'></i> Downloaded</p>"}
+        $('#videoInfo').html(`<div class="videoInfoContent">
+                              <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="selectVideo(-1)">
+                                <i class="fa fa-arrow-left"></i> Back to Video Settings
+                              </button>
+                              <br><br>
+                              ${hasVideoSource ? "" : "<p class='w3-small'>Preview is unavailable for this video source.</p>"}
+                              ${hasDownloadedCopy ? "<p class='w3-large'><i class='far fa-check-circle' style='color: #4CAF50'></i> Downloaded</p>" : "<p class='w3-large'><i class='far fa-times-circle' style='color: #f44336'></i> Downloaded</p>"}
                               <div class="w3-small">
                               <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="whenChecked" ${videoDownloadState === "whenChecked" ? "checked" : ""}>
                               <label>Download when checked and cache is enabled</label><br>  
@@ -666,14 +955,17 @@ function selectVideo(index) {
                               <label>Always download</label><br>
                               <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="never" ${videoDownloadState === "never" ? "checked" : ""}>
                               <label>Never download</label>
-                              </div>`).css('display', '');
+                              </div></div>`).css('display', '');
         $('#videoSettings').css('display', 'none');
     } else {
-        $('#videoPlayer').attr("src", "").hide();
+        const player = document.getElementById("videoPlayer");
+        player.pause();
+        player.removeAttribute("src");
+        player.load();
+        $('#videoPlayer').hide();
         $('#videoName').text("Video Settings");
         $('#videoInfo').css('display', 'none');
-        $('#videoSettings').html(`<br>
-                                  <div class="w3-container">
+        $('#videoSettings').html(`<div class="w3-container videoSettingsContent">
                                   <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectAll()">Select All</button>
                                   <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectAll()">Deselect All</button>
                                   <br><br>

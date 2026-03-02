@@ -12,7 +12,7 @@
  
 Aerial is a Windows screen saver that mimics Apple's  Apple TV screen saver. It plays the various videos Apple shot of cities, landscapes, underwater scenes, and the earth from the ISS.
 
-> Mac user? Try [JohnCoates/Aerial](https://github.com/JohnCoates/Aerial). Linux user? Try [graysky2/xscreensaver-aerial](https://github.com/graysky2/xscreensaver-aerial/).
+> Legacy alternatives: [JohnCoates/Aerial for macOS](https://github.com/JohnCoates/Aerial) and [graysky2/xscreensaver-aerial for Linux](https://github.com/graysky2/xscreensaver-aerial/).
 
 ## Installing
 Download the latest release from [here](https://github.com/phantasma2983/Aerial/releases). Run the installer and configure your settings.

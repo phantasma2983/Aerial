@@ -74,12 +74,39 @@ function videoError(event) {
     }
 }
 
-function prepVideo(videoContainer, callback) {
+function getVideoSource(videoInfo) {
+    if (!videoInfo || !videoInfo.src) {
+        return undefined;
+    }
+    const preferredType = electron.store.get('videoFileType');
+    const aliases = {
+        H2651080p: "HEVC1080p",
+        H2654k: "HEVC2160p"
+    };
+    const resolvedPreferredType = aliases[preferredType] ?? preferredType;
+    if (videoInfo.src[resolvedPreferredType]) {
+        return videoInfo.src[resolvedPreferredType];
+    }
+    const fallbackOrder = ["H2641080p", "HEVC1080p", "HEVC2160p"];
+    for (const type of fallbackOrder) {
+        if (videoInfo.src[type]) {
+            return videoInfo.src[type];
+        }
+    }
+    for (const value of Object.values(videoInfo.src)) {
+        if (typeof value === "string" && value.length > 0) {
+            return value;
+        }
+    }
+    return undefined;
+}
+
+function prepVideo(videoContainer, direction, callback) {
     if (blackScreen) {
         return
     }
     containers[videoContainer].src = "";
-    electron.ipcRenderer.invoke('newVideoId', currentlyPlaying).then((id) => {
+    electron.ipcRenderer.invoke('newVideoId', {lastPlayed: currentlyPlaying, direction: direction ?? "next"}).then((id) => {
         let videoInfo, videoSRC;
         //grab video info and file location based on whether it is a custom video or not
         if (id[0] === "_") {
@@ -88,6 +115,9 @@ function prepVideo(videoContainer, callback) {
                     return true;
                 }
             })];
+            if (!videoInfo) {
+                return;
+            }
             videoSRC = videoInfo.path;
         } else {
             let index = videos.findIndex((e) => {
@@ -95,12 +125,18 @@ function prepVideo(videoContainer, callback) {
                     return true;
                 }
             });
+            if (index === -1) {
+                return;
+            }
             videoInfo = videos[index];
             downloadedVideos = electron.store.get("downloadedVideos");
-            videoSRC = videoInfo.src[electron.store.get('videoFileType')];
+            videoSRC = getVideoSource(videoInfo);
             if (downloadedVideos.includes(videoInfo.id)) {
                 videoSRC = `${electron.store.get('cachePath')}/${videoInfo.id}.mov`;
             }
+        }
+        if (!videoSRC) {
+            return;
         }
         //load video in video player
         containers[videoContainer].videoId = id;
@@ -132,10 +168,10 @@ function playVideo(videoContainer, loadedCallback) {
 
 let videoWaitingTimeout;
 
-function newVideo() {
+function newVideo(direction = "next") {
     const targetPlayer = prePlayer;
     logPlayback("newVideo requested", {currentPlayer, prePlayer: targetPlayer});
-    prepVideo(targetPlayer, () => {
+    prepVideo(targetPlayer, direction, () => {
         clearTimeout(videoWaitingTimeout);
         let started = false;
         const onCanPlay = () => {
@@ -314,12 +350,12 @@ function fadeVideoIn(time) {
     if (time === transitionLength) {
         if (transitionSettings.type === "random") {
             randomType = true;
-            transitionSettings.type = transitionTypes[randomInt(0, transitionTypes.length)];
-            transitionSettings.direction = transitionDirections[transitionSettings.type][randomInt(0, transitionDirections[transitionSettings.type].length)];
+            transitionSettings.type = transitionTypes[randomInt(0, transitionTypes.length - 1)];
+            transitionSettings.direction = transitionDirections[transitionSettings.type][randomInt(0, transitionDirections[transitionSettings.type].length - 1)];
         }
         if (transitionSettings.direction === "random") {
             randomDirection = true;
-            transitionSettings.direction = transitionDirections[transitionSettings.type][randomInt(0, transitionDirections[transitionSettings.type].length)];
+            transitionSettings.direction = transitionDirections[transitionSettings.type][randomInt(0, transitionDirections[transitionSettings.type].length - 1)];
         }
     }
     if (time > 0) {
@@ -371,8 +407,8 @@ const transitionTypes = ["dissolve", "dipToBlack", "fade", "wipe", "circle", "fa
 const transitionDirections = {
     "dissolve": [""],
     "dipToBlack": [""],
-    "fade": ["left", "right", "top", "down", "top-left", "top-right", "bottom-left", "bottom-right"],
-    "wipe": ["left", "right", "top", "down"],
+    "fade": ["left", "right", "top", "bottom", "top-left", "top-right", "bottom-left", "bottom-right"],
+    "wipe": ["left", "right", "top", "bottom"],
     "circle": ["normal", "reverse"],
     "fadeCircle": ["normal", "reverse"]
 };
@@ -787,14 +823,14 @@ function switchRandomText() {
 }
 
 function randomInt(min, max) {
-    return Math.floor(Math.random() * max) - min;
+    return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
 //play a video
 newVideo();
 
-electron.ipcRenderer.on('newVideo', () => {
-    newVideo();
+electron.ipcRenderer.on('newVideo', (direction) => {
+    newVideo(direction === "previous" ? "previous" : "next");
 });
 
 electron.ipcRenderer.on('blankTheScreen', () => {
