@@ -578,7 +578,14 @@ function createTrayWindow() {
         }
     });
 
-    function newMenu(isSuspendChecked) {
+    function refreshTrayMenu() {
+        if (!trayIcon) {
+            return;
+        }
+        trayIcon.setContextMenu(newMenu());
+    }
+
+    function newMenu() {
         return Menu.buildFromTemplate([
             {
                 label: "Open Config", click: (item, window, event) => {
@@ -592,12 +599,11 @@ function createTrayWindow() {
                 }
             },
             {
-                label: 'Suspend Aerial',
-                type: "checkbox",
-                checked: isSuspendChecked,
-                click: (e) => {
-                    suspend = e.checked;
+                label: suspend ? "Suspend Aerial (ON)" : "Suspend Aerial (OFF)",
+                click: () => {
+                    suspend = !suspend;
                     clearTimeout(suspendCountdown);
+                    refreshTrayMenu();
                 }
             },
             {
@@ -605,11 +611,10 @@ function createTrayWindow() {
                 click: (e) => {
                     suspend = true;
                     clearTimeout(suspendCountdown);
-                    if (trayIcon) {
-                        trayIcon.setContextMenu(newMenu(true));
-                    }
+                    refreshTrayMenu();
                     suspendCountdown = setTimeout(() => {
-                        suspend = false
+                        suspend = false;
+                        refreshTrayMenu();
                     }, (1000 * 60) + (store.get('startAfter') * 60));
                 }
             },
@@ -618,8 +623,10 @@ function createTrayWindow() {
                 click: (e) => {
                     suspend = true;
                     clearTimeout(suspendCountdown);
+                    refreshTrayMenu();
                     suspendCountdown = setTimeout(() => {
-                        suspend = false
+                        suspend = false;
+                        refreshTrayMenu();
                     }, (1000 * 60 * 3) + (store.get('startAfter') * 60));
                 }
             },
@@ -635,7 +642,7 @@ function createTrayWindow() {
     }
 
     trayIcon = new Tray(path.join(__dirname, 'icon.ico'));
-    trayIcon.setContextMenu(newMenu(false));
+    refreshTrayMenu();
     trayIcon.setToolTip("Aerial");
     logLifecycle("createTrayWindow:ready");
 }
