@@ -15,8 +15,6 @@ const {
 const {exec, execFile} = require('child_process');
 const bundledVideos = require("./videos.json");
 const packageMetadata = require("./package.json");
-const Store = require('electron-store');
-const store = new Store();
 const https = require('https');
 const fs = require('fs');
 const path = require("path");
@@ -28,6 +26,12 @@ let autoLauncher = new AutoLaunch({
 const SunCalc = require('suncalc');
 
 const UPSTREAM_REPO_URL = "https://github.com/OrangeJedi/Aerial";
+let store;
+
+async function initializeStore() {
+    const {default: Store} = await import('electron-store');
+    store = new Store();
+}
 
 function getGitHubRepoFromUrl(repositoryUrl) {
     if (!repositoryUrl || typeof repositoryUrl !== "string") {
@@ -132,9 +136,9 @@ function syncVideoCatalog() {
 let screens = [];
 let screenIds = [];
 let nq = false;
-let cachePath = store.get('cachePath') ?? path.join(app.getPath('userData'), "videos");
+let cachePath = path.join(app.getPath('userData'), "videos");
 let downloading = false;
-let allowedVideos = store.get("allowedVideos");
+let allowedVideos = [];
 let previouslyPlayed = [];
 let currentlyPlaying = '';
 let playedVideoHistory = [];
@@ -717,9 +721,34 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason) => {
     logLifecycle("process:unhandledRejection", {reason: String(reason)});
 });
-app.whenReady().then(startUp);
+
+ipcMain.on('store-get-sync', (event, key) => {
+    event.returnValue = store.get(key);
+});
+
+ipcMain.on('store-set-sync', (event, payload) => {
+    if (!payload || typeof payload.key !== "string") {
+        event.returnValue = false;
+        return;
+    }
+    store.set(payload.key, payload.value);
+    event.returnValue = true;
+});
+
+async function bootstrap() {
+    await initializeStore();
+    app.whenReady().then(startUp);
+}
+
+bootstrap().catch((error) => {
+    console.error('Failed to initialize electron-store', error);
+    app.exit(1);
+});
 
 function startUp() {
+    cachePath = store.get('cachePath') ?? path.join(app.getPath('userData'), "videos");
+    allowedVideos = store.get("allowedVideos") ?? [];
+
     logLifecycle("startUp", {
         argv: process.argv,
         isPackaged: app.isPackaged,

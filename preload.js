@@ -1,9 +1,15 @@
 const {contextBridge, ipcRenderer} = require("electron");
-const Store = require('electron-store');
 const {getVideoSource, sanitizeExtraVideo} = require('./shared/video-utils');
 const textUtils = require('./shared/text-utils');
-const store = new Store();
 const bundledVideos = require("./videos.json");
+
+function storeGetSync(key) {
+    return ipcRenderer.sendSync('store-get-sync', key);
+}
+
+function storeSetSync(key, value) {
+    return ipcRenderer.sendSync('store-set-sync', {key, value});
+}
 
 // Expose protected methods from node modules
 contextBridge.exposeInMainWorld("electron", {
@@ -28,10 +34,10 @@ contextBridge.exposeInMainWorld("electron", {
         }
     },
     store: {
-        get: (key) => store.get(key),
-        set: (key, value) => store.set(key, value)
+        get: (key) => storeGetSync(key),
+        set: (key, value) => storeSetSync(key, value)
     },
-    videos: store.get("videoCatalog") ?? bundledVideos,
+    videos: storeGetSync("videoCatalog") ?? bundledVideos,
     bundledVideos,
     videoUtils: {
         getVideoSource,
