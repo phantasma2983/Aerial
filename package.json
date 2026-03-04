@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder",
-    "build": "electron-builder build",
+    "build": "electron-builder build && node scripts/create-scr-artifact.js",
     "lint": "node scripts/run-syntax-lint.js",
     "lint:targets": "node scripts/run-syntax-lint.js --list"
   },
@@ -33,9 +33,12 @@
     "suncalc": "~1.9.0"
   },
   "build": {
+    "appId": "com.phantasma2983.aerial",
     "win": {
-      "target": "nsis",
-      "signAndEditExecutable": false
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "nsis": {
       "installerIcon": "icon.ico",

@@ -19,6 +19,14 @@ Download the latest release from [here](https://github.com/phantasma2983/Aerial/
 
 Be sure to configure your system's screen and sleep settings accordingly and to disable any other screensavers.
 
+### Optional `.scr` install
+Releases also include `Aerial.scr` for native Windows screensaver install flow.
+
+1. Download `Aerial.scr`.
+2. Right-click the file and choose `Install`.
+3. In Windows Screen Saver Settings, select `Aerial` from the drop-down and use `Settings...` to open the config UI.
+4. The tiny monitor-thumbnail preview (`/p`) is not embedded yet; use `Preview` or wait for idle to test fullscreen playback.
+
 ## Features
 ![image](https://user-images.githubusercontent.com/25063853/224231865-f8716c9a-ff9a-4c2b-bf18-21dc1bd4d504.png)
 Aerial brings the AppleTV's wonderful screensavers to your Windows desktop. You can limit which videos to play, or randomly play them all. 

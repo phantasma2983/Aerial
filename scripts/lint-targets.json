@@ -2,6 +2,7 @@
   "targets": [
     "app.js",
     "preload.js",
+    "scripts/create-scr-artifact.js",
     "shared/video-utils.js",
     "shared/text-utils.js",
     "web/config.js",

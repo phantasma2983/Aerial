@@ -20,6 +20,28 @@ const fs = require('fs');
 const path = require("path");
 const AutoLaunch = require('auto-launch');
 const {getVideoSource, sanitizeExtraVideo} = require('./shared/video-utils');
+const APP_ICON_PATH = path.join(__dirname, 'icon.ico');
+const APP_USER_MODEL_ID = "com.phantasma2983.aerial";
+
+if (process.platform === "win32") {
+    app.setAppUserModelId(APP_USER_MODEL_ID);
+}
+
+function applyWindowsAppDetails(win) {
+    if (process.platform !== "win32") {
+        return;
+    }
+    if (typeof win.setAppDetails !== "function") {
+        return;
+    }
+    win.setAppDetails({
+        appId: APP_USER_MODEL_ID,
+        appIconPath: APP_ICON_PATH,
+        appIconIndex: 0,
+        relaunchDisplayName: "Aerial"
+    });
+}
+
 let autoLauncher = new AutoLaunch({
     name: 'Aerial',
 });
@@ -149,10 +171,39 @@ let suspendCountdown;
 let isComputerSleeping = false;
 let isComputerSuspendedOrLocked = false;
 let isAppQuitting = false;
-const launchedAsScreensaverSession = process.argv.some((arg) => {
-    const normalized = String(arg || "").toLowerCase();
-    return normalized === "/s" || normalized === "/p" || normalized === "/t";
-});
+function parseLaunchFlags(argv) {
+    const flags = {
+        config: false,
+        preview: false,
+        screensaver: false,
+        testPreview: false,
+        noQuit: false,
+        screensaverSession: false
+    };
+    for (const arg of argv ?? []) {
+        const normalized = String(arg || "").trim().toLowerCase();
+        if (!normalized) {
+            continue;
+        }
+        const slashArg = normalized.startsWith("-") ? `/${normalized.slice(1)}` : normalized;
+        const token = slashArg.split(":")[0];
+        if (token === "/c") {
+            flags.config = true;
+        } else if (token === "/p") {
+            flags.preview = true;
+        } else if (token === "/s") {
+            flags.screensaver = true;
+        } else if (token === "/t") {
+            flags.testPreview = true;
+        } else if (token === "/nq") {
+            flags.noQuit = true;
+        }
+    }
+    flags.screensaverSession = flags.config || flags.preview || flags.screensaver || flags.testPreview;
+    return flags;
+}
+const launchFlags = parseLaunchFlags(process.argv);
+const launchedAsScreensaverSession = launchFlags.screensaverSession;
 let exitingScreensaverWindows = false;
 let launchScreensaverBusy = false;
 let fullscreenCheckInProgress = false;
@@ -333,8 +384,9 @@ function createConfigWindow(argv) {
         autoHideMenuBar: true,
         minWidth: 1024,
         minHeight: 768,
-        icon: path.join(__dirname, 'icon.ico')
+        icon: APP_ICON_PATH
     });
+    applyWindowsAppDetails(win);
     if (typeof win.removeMenu === "function") {
         win.removeMenu();
     } else {
@@ -419,9 +471,10 @@ function createSSWindow(argv) {
             fullscreen: !nq,
             transparent: true,
             frame: nq,
-            icon: path.join(__dirname, 'icon.ico'),
+            icon: APP_ICON_PATH,
             show: false
         })
+        applyWindowsAppDetails(win);
         if (!renderScreensaver) {
             win.loadFile('web/black.html');
         } else {
@@ -488,9 +541,10 @@ function createSSPWindow(argv) {
         },
         frame: true,
         transparent: true,
-        icon: path.join(__dirname, 'icon.ico'),
+        icon: APP_ICON_PATH,
         show: false
     });
+    applyWindowsAppDetails(win);
     win.loadFile('web/screensaver.html');
     win.webContents.once('did-finish-load', () => {
         win.webContents.send('screenNumber', 0);
@@ -526,8 +580,9 @@ function createEditWindow(argv) {
             sandbox: false,
             preload: path.join(__dirname, "preload.js")
         },
-        icon: path.join(__dirname, 'icon.ico')
+        icon: APP_ICON_PATH
     });
+    applyWindowsAppDetails(win);
     win.loadFile('web/video-info.html');
     win.on('closed', function () {
         win = null;
@@ -558,8 +613,9 @@ function createTrayWindow() {
             webSecurity: true,
             sandbox: true,
         },
-        icon: path.join(__dirname, 'icon.ico')
+        icon: APP_ICON_PATH
     });
+    applyWindowsAppDetails(trayWindow);
     //trayWindow.loadURL("https://google.com/");
     trayWindow.on("close", (event) => {
         // Keep tray window hidden instead of destroyed when users close it.
@@ -645,7 +701,7 @@ function createTrayWindow() {
         ]);
     }
 
-    trayIcon = new Tray(path.join(__dirname, 'icon.ico'));
+    trayIcon = new Tray(APP_ICON_PATH);
     refreshTrayMenu();
     trayIcon.setToolTip("Aerial");
     logLifecycle("createTrayWindow:ready");
@@ -784,7 +840,7 @@ function startUp() {
         autoLauncher.disable();
     }
     //prevents quiting the app if wanted
-    if (process.argv.includes("/nq")) {
+    if (launchFlags.noQuit) {
         nq = true;
     }
     clearCacheTemp();
@@ -792,14 +848,16 @@ function startUp() {
         removeAllUnallowedVideosInCache();
     }
     removeAllNeverAllowedVideosInCache();
-    if (process.argv.includes("/c")) {
+    if (launchFlags.config) {
         createConfigWindow(process.argv);
-    } else if (process.argv.includes("/p")) {
-        //createSSPWindow();
+    } else if (launchFlags.preview) {
+        // Windows passes /p for tiny Screen Saver Settings thumbnail preview.
+        // Embedded preview hosting is not supported in this Electron path yet,
+        // so avoid opening a standalone window and exit cleanly.
         app.quit();
-    } else if (process.argv.includes("/s")) {
+    } else if (launchFlags.screensaver) {
         createSSWindow(process.argv);
-    } else if (process.argv.includes("/t")) {
+    } else if (launchFlags.testPreview) {
         createSSPWindow(process.argv);
     } else {
         if (store.get('useTray')) {
@@ -1168,7 +1226,7 @@ ipcMain.on('selectFile', async (event, args) => {
 });
 
 ipcMain.on('openPreview', (event) => {
-    createSSPWindow(process.argv);
+    createSSWindow(process.argv);
 });
 
 ipcMain.on('openInfoEditor', (event) => {
@@ -1717,8 +1775,6 @@ function setTimeOfDayList() {
         }
     }
 }
-
-setTimeOfDayList();
 
 function getTimeOfDay() {
     let cHour = new Date().getHours();
