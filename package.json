@@ -1,13 +1,13 @@
 {
   "name": "aerial",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "videoJSONVersion": "1.15.0",
   "description": "Apple TV screen saver for Windows",
   "main": "app.js",
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder",
-    "build": "electron-builder build",
+    "build": "electron-builder build && node scripts/create-scr-artifact.js",
     "lint": "node scripts/run-syntax-lint.js",
     "lint:targets": "node scripts/run-syntax-lint.js --list"
   },
@@ -27,15 +27,18 @@
   },
   "dependencies": {
     "auto-launch": "~5.0.6",
-    "electron-store": "~8.2.0",
+    "electron-store": "~11.0.2",
     "font-list-universal": "~1.0.0",
     "json-beautify": "~1.1.1",
     "suncalc": "~1.9.0"
   },
   "build": {
+    "appId": "com.phantasma2983.aerial",
     "win": {
-      "target": "nsis",
-      "signAndEditExecutable": false
+      "target": [
+        "nsis",
+        "portable"
+      ]
     },
     "nsis": {
       "installerIcon": "icon.ico",
