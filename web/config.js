@@ -219,7 +219,12 @@ function displayExtraVideos() {
         for (const video of extraVideos) {
             const safeId = String(video.id).replace(/'/g, "\\'");
             html += `<tr>
-                    <td>${video.name ?? video.id}<br><span class="w3-small">${video.id}</span></td>
+                    <td>
+                        <div class="videoInfoLabelCell">
+                            ${video.name ?? video.id}
+                            <span class="videoInfoVideoId">${video.id}</span>
+                        </div>
+                    </td>
                     <td style="width: 40px"><i class='fa fa-times w3-large' style='color: #f44336' onclick="removeExtraVideo('${safeId}')"></i></td>
                 </tr>`;
         }
@@ -232,9 +237,13 @@ function displayPlaybackSettings() {
     let settings = electron.store.get('videoFilters');
     let html = "";
     for (let i = 0; i < settings.length; i++) {
-        html += `<label>${settings[i].name}: <span id="${settings[i].name}Text">${settings[i].value}</span></label><span class="w3-right" onclick="resetSetting('${settings[i].name}', 'filterSlider', ${settings[i].defaultValue})"><i class="fa fa-undo"></i></span>
-                <br>
-                <input type="range" min="${settings[i].min}" max="${settings[i].max}" value="${settings[i].value}" step="1" id="${settings[i].name}" class="slider" onchange="updateSetting('${settings[i].name}','filterSlider')">`;
+        html += `<div class="filterSettingRow">
+                    <div class="settingSplitRow">
+                        <label>${settings[i].name}: <span id="${settings[i].name}Text">${settings[i].value}</span></label>
+                        <span onclick="resetSetting('${settings[i].name}', 'filterSlider', ${settings[i].defaultValue})"><i class="fa fa-undo"></i></span>
+                    </div>
+                    <input type="range" min="${settings[i].min}" max="${settings[i].max}" value="${settings[i].value}" step="1" id="${settings[i].name}" class="slider" onchange="updateSetting('${settings[i].name}','filterSlider')">
+                 </div>`;
     }
     $('#videoFilterSettings').html(html);
 }
@@ -495,7 +504,7 @@ function newId() {
 }
 
 function displayCustomVideos() {
-    let html = "<br>";
+    let html = "";
     customVideos = electron.store.get('customVideos');
     html += "<table class='w3-table-all'>";
     for (let i = 0; i < customVideos.length; i++) {
@@ -956,9 +965,7 @@ function selectSetting(item) {
     for (let i = 0; i < list.length; i++) {
         list[i].className = list[i].className.replace("w3-deep-orange", "");
     }
-    if (item !== "general") {
-        document.getElementById(`settingsList-${item}`).className += " w3-deep-orange";
-    }
+    document.getElementById(`settingsList-${item}`).className += " w3-deep-orange";
     let cards = settingsTab.getElementsByClassName("settingsCard");
     for (let i = 0; i < cards.length; i++) {
         cards[i].style.display = "none";
@@ -1003,7 +1010,6 @@ function makeList() {
                         </a>
                       </div>`;
     }
-    videoList += "<br>";
     $('#videoList').html(videoList);
 }
 
@@ -1048,16 +1054,21 @@ function selectVideo(index) {
                               <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="selectVideo(-1)">
                                 <i class="fa fa-arrow-left"></i> Back to Video Settings
                               </button>
-                              <br><br>
                               ${hasVideoSource ? "" : "<p class='w3-small'>Preview is unavailable for this video source.</p>"}
                               ${hasDownloadedCopy ? "<p class='w3-large'><i class='far fa-check-circle' style='color: #4CAF50'></i> Downloaded</p>" : "<p class='w3-large'><i class='far fa-times-circle' style='color: #f44336'></i> Downloaded</p>"}
-                              <div class="w3-small">
-                              <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="whenChecked" ${videoDownloadState === "whenChecked" ? "checked" : ""}>
-                              <label>Download when checked and cache is enabled</label><br>  
-                              <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="always" ${videoDownloadState === "always" ? "checked" : ""}>
-                              <label>Always download</label><br>
-                              <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="never" ${videoDownloadState === "never" ? "checked" : ""}>
-                              <label>Never download</label>
+                              <div class="w3-small videoInfoDownloadOptions">
+                                  <label class="videoInfoDownloadOption">
+                                      <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="whenChecked" ${videoDownloadState === "whenChecked" ? "checked" : ""}>
+                                      <span>Download when checked and cache is enabled</span>
+                                  </label>
+                                  <label class="videoInfoDownloadOption">
+                                      <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="always" ${videoDownloadState === "always" ? "checked" : ""}>
+                                      <span>Always download</span>
+                                  </label>
+                                  <label class="videoInfoDownloadOption">
+                                      <input class="w3-radio" type="radio" name="downloadVideo" onclick="changeVideoDownloadState(this, '${videos[index].id}')" value="never" ${videoDownloadState === "never" ? "checked" : ""}>
+                                      <span>Never download</span>
+                                  </label>
                               </div></div>`).css('display', '');
         $('#videoSettings').css('display', 'none');
     } else {
@@ -1069,34 +1080,38 @@ function selectVideo(index) {
         $('#videoName').text("Video Settings");
         $('#videoInfo').css('display', 'none');
         $('#videoSettings').html(`<div class="w3-container videoSettingsContent">
-                                  <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectAll()">Select All</button>
-                                  <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectAll()">Deselect All</button>
-                                  <br><br>
-                                  <select class="w3-select w3-border" style="width: 25%" id="videoType">
-                                     <option value="cityscape">Cityscape</option>
-                                     <option value="landscape">Landscape</option>
-                                     <option value="space">Space</option>
-                                     <option value="underwater">Underwater</option>
-                                  </select> 
-                                  <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectType()">Select Type</button>
-                                  <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectType()">Deselect Type</button>
-                                  <br>
+                                  <div class="settingActionRow">
+                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectAll()">Select All</button>
+                                      <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectAll()">Deselect All</button>
+                                  </div>
+                                  <div class="videoSettingsSelectRow">
+                                      <select class="w3-select w3-border" style="width: 25%" id="videoType">
+                                         <option value="cityscape">Cityscape</option>
+                                         <option value="landscape">Landscape</option>
+                                         <option value="space">Space</option>
+                                         <option value="underwater">Underwater</option>
+                                      </select>
+                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectType()">Select Type</button>
+                                      <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectType()">Deselect Type</button>
+                                  </div>
                                   <h3>Profiles</h3>
                                   <select class="w3-select w3-border" id="videoProfiles">
                                   </select>
-                                  <br><br>
-                                  <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="displayProfile('videoProfiles')">Load Profile</button>
-                                  <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="updateProfile('videoProfiles')">Update Profile</button>
-                                  <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="removeProfile('videoProfiles')">Delete Profile</button>
-                                  <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="document.getElementById('createVideoProfile').style.display='block'">Create Profile</button>
-                                  <br>
+                                  <div class="settingActionRow">
+                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="displayProfile('videoProfiles')">Load Profile</button>
+                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="updateProfile('videoProfiles')">Update Profile</button>
+                                      <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="removeProfile('videoProfiles')">Delete Profile</button>
+                                      <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="document.getElementById('createVideoProfile').style.display='block'">Create Profile</button>
+                                  </div>
                                   <h3>Downloads</h3>
-                                  <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="changeAllVideoDownloadState('allVideoDownloadState')">Set all videos to </button>
-                                  <select id="allVideoDownloadState" class="w3-select w3-border" style="width: 35%">
-                                    <option value="whenChecked">download when checked</option>
-                                    <option value="always">always download</option>
-                                    <option value="never">never download</option>
-                                  </select>
+                                  <div class="videoSettingsSelectRow">
+                                      <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="changeAllVideoDownloadState('allVideoDownloadState')">Set all videos to</button>
+                                      <select id="allVideoDownloadState" class="w3-select w3-border" style="width: 35%">
+                                        <option value="whenChecked">download when checked</option>
+                                        <option value="always">always download</option>
+                                        <option value="never">never download</option>
+                                      </select>
+                                  </div>
                                   </div>`).css('display', '');
         let profiles = electron.store.get('videoProfiles');
         let html = "";

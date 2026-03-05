@@ -31,8 +31,9 @@
         <div class="w3-container w3-white editorModalBody">
             <span onclick="closeVideoModal()"
                   class="w3-button w3-display-topright">&times;</span>
-            <br>
-            <video controls id="modalVideo" width="95%"></video>
+            <div class="editorModalStack">
+                <video controls id="modalVideo" width="95%"></video>
+            </div>
         </div>
     </div>
 </div>
@@ -42,8 +43,9 @@
         <div class="w3-container w3-white editorModalBody">
             <span onclick="closeExportModal()"
                   class="w3-button w3-display-topright">&times;</span>
-            <br>
-            <textarea id="exportText" style="width: 95%; height: 450px"></textarea>
+            <div class="editorModalStack">
+                <textarea id="exportText" style="width: 95%; height: 450px"></textarea>
+            </div>
         </div>
     </div>
 </div>
@@ -51,27 +53,30 @@
 <div id="filterModal" class="w3-modal">
     <div class="w3-modal-content">
         <div class="w3-container w3-white editorModalBody">
-            <h3>Filters</h3>
             <span onclick="setFilters()"
                   class="w3-button w3-display-topright">&times;</span>
-            <br>
-            <label for="filterTypeSelect">Type</label>
-            <select id="filterTypeSelect">
-            <option selected value=".*">Any</option>
-            <option value="cityscape">Cityscape</option>
-            <option value="landscape">Landscape</option>
-            <option value="space">Space</option>
-            <option value="underwater">Underwater</option>
-        </select>
-            <br><br>
-            <label for="filterToDSelect">Time of Day</label>
-            <select id="filterToDSelect">
-            <option selected value=".*">Any</option>
-            <option value="day">Day</option>
-            <option value="night">Night</option>
-            <option value="undefined">undefined</option>
-        </select>
-            <br><br>
+            <div class="editorModalStack">
+                <h3>Filters</h3>
+                <div class="fieldRow">
+                    <label for="filterTypeSelect">Type</label>
+                    <select id="filterTypeSelect">
+                        <option selected value=".*">Any</option>
+                        <option value="cityscape">Cityscape</option>
+                        <option value="landscape">Landscape</option>
+                        <option value="space">Space</option>
+                        <option value="underwater">Underwater</option>
+                    </select>
+                </div>
+                <div class="fieldRow">
+                    <label for="filterToDSelect">Time of Day</label>
+                    <select id="filterToDSelect">
+                        <option selected value=".*">Any</option>
+                        <option value="day">Day</option>
+                        <option value="night">Night</option>
+                        <option value="undefined">undefined</option>
+                    </select>
+                </div>
+            </div>
         </div>
     </div>
 </div>

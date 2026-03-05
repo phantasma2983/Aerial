@@ -278,6 +278,103 @@ a:hover {
     padding: 18px !important;
 }
 
+.settingsCardBody > * {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.settingsCardBody > * + * {
+    margin-top: 16px;
+}
+
+.settingsCardBody .w3-check {
+    width: 22px;
+    height: 22px;
+    margin: 0 8px 0 0 !important;
+    position: static;
+    top: auto;
+    vertical-align: middle;
+}
+
+.settingsCardBody label {
+    line-height: 1.35;
+    vertical-align: middle;
+}
+
+.settingInlineRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.settingInlineIndentedRow {
+    padding-left: 30px;
+}
+
+.settingInlineNote {
+    padding-left: 30px;
+}
+
+.inlineNumberInput {
+    width: 90px !important;
+    display: inline-block !important;
+}
+
+.inlineTimeInput {
+    width: 120px !important;
+    display: inline-block !important;
+}
+
+.inlineCoordinateInput {
+    width: 110px !important;
+    display: inline-block !important;
+}
+
+.settingSplitRow {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.transitionDirectionRow {
+    margin-left: 8px;
+}
+
+.settingsCardBody .w3-small,
+.settingsCardBody .settingHint {
+    margin-top: 4px;
+}
+
+.settingActionRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+}
+
+.settingActionRow .w3-button {
+    margin: 0 !important;
+}
+
+.videoSettingsContent > * {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.videoSettingsContent > * + *,
+.videoInfoContent > * + * {
+    margin-top: 12px;
+}
+
+.videoSettingsSelectRow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
 #videoCard .w3-display-container,
 #textCard .w3-display-container {
     background: var(--surface);
@@ -302,6 +399,73 @@ a:hover {
 .videoSettingsContent,
 .videoInfoContent {
     padding: 0 !important;
+}
+
+.videoInfoDownloadOptions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.videoInfoDownloadOption {
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    align-items: center;
+    column-gap: 10px;
+    margin: 0;
+}
+
+.videoInfoDownloadOption .w3-radio {
+    width: 18px;
+    height: 18px;
+    margin: 0 !important;
+    position: static;
+    top: auto;
+    justify-self: center;
+}
+
+.videoInfoDownloadOption span {
+    line-height: 1.35;
+}
+
+.videoInfoLabelCell {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.videoInfoVideoId {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.filterSettingRow > * + * {
+    margin-top: 8px;
+}
+
+.filterSettingRow + .filterSettingRow {
+    margin-top: 14px;
+}
+
+.modalBodyStack {
+    margin-top: 44px;
+    padding-bottom: 20px;
+}
+
+.modalBodyStack > * {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.modalBodyStack > * + * {
+    margin-top: 14px;
+}
+
+.modalActionRow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
 }
 
 button,

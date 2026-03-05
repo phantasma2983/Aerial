@@ -12,7 +12,7 @@ const {
     Notification,
     globalShortcut
 } = require('electron');
-const {exec, execFile} = require('child_process');
+const {exec, execFile, execFileSync} = require('child_process');
 const bundledVideos = require("./videos.json");
 const packageMetadata = require("./package.json");
 const https = require('https');
@@ -22,6 +22,8 @@ const AutoLaunch = require('auto-launch');
 const {getVideoSource, sanitizeExtraVideo} = require('./shared/video-utils');
 const APP_ICON_PATH = path.join(__dirname, 'icon.ico');
 const APP_USER_MODEL_ID = "com.phantasma2983.aerial";
+const LEGACY_UNINSTALL_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\17c6ea6b-270a-5297-8e23-9bcda4a29a48";
+const APPID_UNINSTALL_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\7d047ff4-f1b4-58c5-a9ab-6eaec19eeed0";
 
 if (process.platform === "win32") {
     app.setAppUserModelId(APP_USER_MODEL_ID);
@@ -105,6 +107,65 @@ function logLifecycle(eventName, details) {
         fs.appendFileSync(path.join(userData, LIFECYCLE_LOG_FILE), `${line}\n`);
     } catch {
         // best-effort diagnostics only
+    }
+}
+
+function syncWindowsUninstallRegistration() {
+    if (process.platform !== "win32" || !app.isPackaged) {
+        return;
+    }
+
+    const regExe = path.join(process.env.windir || "C:\\Windows", "System32", "reg.exe");
+    const uninstallerPath = path.join(path.dirname(process.execPath), "Uninstall Aerial.exe");
+    if (!fs.existsSync(uninstallerPath)) {
+        return;
+    }
+
+    const readRegValue = (key, name) => {
+        try {
+            const output = execFileSync(regExe, ["query", key, "/v", name], {
+                encoding: "utf8",
+                stdio: ["ignore", "pipe", "ignore"],
+            });
+            const match = output.match(new RegExp(`\\s${name}\\s+REG_\\w+\\s+(.+)$`, "m"));
+            return match ? match[1].trim() : "";
+        } catch {
+            return "";
+        }
+    };
+
+    const writeRegValue = (key, name, type, value) => {
+        execFileSync(regExe, ["add", key, "/v", name, "/t", type, "/d", String(value), "/f"], {
+            stdio: ["ignore", "ignore", "ignore"],
+        });
+    };
+
+    try {
+        const uninstallString = `"${uninstallerPath}" /currentuser`;
+        const quietUninstallString = `"${uninstallerPath}" /currentuser /S`;
+        const publisher = readRegValue(LEGACY_UNINSTALL_KEY, "Publisher")
+            || readRegValue(APPID_UNINSTALL_KEY, "Publisher")
+            || "phantasma2983";
+        const staleExists = readRegValue(APPID_UNINSTALL_KEY, "UninstallString") !== "";
+
+        writeRegValue(LEGACY_UNINSTALL_KEY, "DisplayName", "REG_SZ", `Aerial ${app.getVersion()}`);
+        writeRegValue(LEGACY_UNINSTALL_KEY, "DisplayVersion", "REG_SZ", app.getVersion());
+        writeRegValue(LEGACY_UNINSTALL_KEY, "UninstallString", "REG_SZ", uninstallString);
+        writeRegValue(LEGACY_UNINSTALL_KEY, "QuietUninstallString", "REG_SZ", quietUninstallString);
+        writeRegValue(LEGACY_UNINSTALL_KEY, "DisplayIcon", "REG_SZ", `${process.execPath},0`);
+        writeRegValue(LEGACY_UNINSTALL_KEY, "Publisher", "REG_SZ", publisher);
+        writeRegValue(LEGACY_UNINSTALL_KEY, "NoModify", "REG_DWORD", 1);
+        writeRegValue(LEGACY_UNINSTALL_KEY, "NoRepair", "REG_DWORD", 1);
+
+        if (staleExists) {
+            execFileSync(regExe, ["delete", APPID_UNINSTALL_KEY, "/f"], {
+                stdio: ["ignore", "ignore", "ignore"],
+            });
+        }
+    } catch (error) {
+        logLifecycle("windows-uninstall-sync-failed", {
+            message: error?.message ?? String(error),
+        });
     }
 }
 
@@ -811,6 +872,7 @@ function startUp() {
         launchedAsScreensaverSession
     });
     Menu.setApplicationMenu(null);
+    syncWindowsUninstallRegistration();
     setRepositoryMetadata();
     //Uncomment the line below when compiling the .scr file
     //store.set('useTray', false);

@@ -230,6 +230,19 @@ textarea:focus {
     font-size: 1.1rem;
 }
 
+.editorModalStack {
+    margin-top: 44px;
+}
+
+.editorModalStack > * {
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+.editorModalStack > * + * {
+    margin-top: 14px;
+}
+
 #modalVideo,
 #exportText {
     width: 100%;
