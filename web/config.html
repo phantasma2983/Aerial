@@ -298,6 +298,18 @@
                                 onclick="updateCache()">
                             Update cache
                         </button>
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                onclick="runCacheAction('downloadSelectedNow')">
+                            Download Selected Now
+                        </button>
+                        <button class="w3-button w3-white w3-border w3-border-red w3-round-large"
+                                onclick="runCacheAction('removeUncheckedNow', 'Remove cached videos that are no longer selected or are explicitly blocked?')">
+                            Remove Unchecked Now
+                        </button>
+                        <button class="w3-button w3-white w3-border w3-border-red w3-round-large"
+                                onclick="runCacheAction('removeOrphanedNow', 'Remove orphaned cache files that no longer map to known videos?')">
+                            Remove Orphans
+                        </button>
                         <button class="w3-button w3-white w3-border w3-border-red w3-round-large"
                                 onclick="deleteCache()">
                             Delete all files
@@ -312,6 +324,17 @@
                         </button>
                     </div>
                     <p class="w3-small">Cache Size: <span id="videoCacheSize"></span></p>
+                    <hr>
+                    <h4>Cache Manager</h4>
+                    <div id="cacheManagerSummary"></div>
+                    <div class="cacheManagerBlock">
+                        <h5>Downloaded vs Missing by Category</h5>
+                        <div id="cacheCategoryStats"></div>
+                    </div>
+                    <div class="cacheManagerBlock">
+                        <h5>Stale / Orphaned Files</h5>
+                        <div id="cacheFileStates"></div>
+                    </div>
                 </div>
             </div>
             <div id="customVideoSettings" class="settingsCard" style="display: none">
@@ -380,11 +403,34 @@
                                onclick="updateSetting('debugPlayback','check')">
                         <label for="debugPlayback">Enable playback diagnostics overlay + logging</label>
                     </div>
-                    <div class="settingActionRow">
-                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
-                                onclick="electron.ipcRenderer.send('openPlaybackLog');">
-                            Open Playback Log
-                        </button>
+                    <div class="aboutPanelBlock logManagerBlock">
+                        <div class="settingSplitRow">
+                            <h4>Log Manager</h4>
+                            <span class="w3-small settingHint">Lifecycle logs are capped and rolled automatically.</span>
+                        </div>
+                        <div id="logManagerSummary" class="infoPanel"></div>
+                        <div class="settingActionRow">
+                            <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                    onclick="electron.ipcRenderer.send('openLifecycleLog');">
+                                Open Lifecycle Log
+                            </button>
+                            <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                    onclick="electron.ipcRenderer.send('openPlaybackLog');">
+                                Open Playback Log
+                            </button>
+                            <button class="w3-button w3-white w3-border w3-border-red w3-round-large"
+                                    onclick="clearLogs('lifecycle')">
+                                Clear Lifecycle Log
+                            </button>
+                            <button class="w3-button w3-white w3-border w3-border-red w3-round-large"
+                                    onclick="clearLogs('playback')">
+                                Clear Playback Log
+                            </button>
+                            <button class="w3-button w3-white w3-border w3-border-red w3-round-large"
+                                    onclick="clearLogs('all')">
+                                Clear All Logs
+                            </button>
+                        </div>
                     </div>
                     <hr>
                     <div class="settingActionRow">
@@ -403,6 +449,28 @@
                             Aerial
                         </button>
                     </div>
+                    <hr>
+                    <h4>Config Backup & Restore</h4>
+                    <p class="w3-small settingHint">Export settings for another machine, create local backups before risky changes, and restore a previous config snapshot.</p>
+                    <div class="settingActionRow">
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                onclick="exportSettings()">
+                            Export Settings
+                        </button>
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                onclick="importSettings()">
+                            Import Settings
+                        </button>
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                onclick="createSettingsBackup()">
+                            Create Backup
+                        </button>
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                onclick="restoreSettingsBackup()">
+                            Restore Backup
+                        </button>
+                    </div>
+                    <div id="configBackupSummary" class="infoPanel"></div>
                 </div>
             </div>
             <div id="aboutSettings" class="settingsCard" style="display: none">
@@ -435,7 +503,20 @@
                             License</a>.
                     </p>
                     <hr>
-                    Version: <span id="version"></span>
+                    <div class="statsCardGrid aboutStatsGrid">
+                        <div class="statsCard">
+                            <span class="statsLabel">Installed</span>
+                            <span class="statsValue" id="installedVersion"></span>
+                        </div>
+                        <div class="statsCard">
+                            <span class="statsLabel">Latest Release</span>
+                            <span class="statsValue" id="latestReleaseVersion"></span>
+                        </div>
+                    </div>
+                    <div class="infoGrid compactInfoGrid">
+                        <div><span class="infoLabel">Current config version</span><span class="infoValue" id="version"></span></div>
+                        <div><span class="infoLabel">Published</span><span class="infoValue" id="latestReleasePublishedAt"></span></div>
+                    </div>
                     <div id="aboutUpdate" style="display: none">
                         <div class="w3-panel w3-pale-green" style="padding-bottom: 2%">
                             <h4>A new version of Aerial is available!</h4>
@@ -443,6 +524,20 @@
                             to
                             download version v<span id="updateAvailable"></span>
                         </div>
+                    </div>
+                    <div class="aboutPanelBlock">
+                        <div class="settingSplitRow">
+                            <h4>Latest Release Notes</h4>
+                            <a id="openReleasePageButton" class="w3-button w3-white w3-border w3-border-blue w3-round-large" href="https://github.com/phantasma2983/Aerial/releases" target="_blank">Open Release Page</a>
+                        </div>
+                        <pre id="latestReleaseNotes" class="releaseNotesPanel"></pre>
+                    </div>
+                    <div class="settingActionRow">
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                onclick="copyDiagnostics()">
+                            Copy Diagnostics
+                        </button>
+                        <span id="diagnosticsCopyStatus" class="w3-small"></span>
                     </div>
                 </div>
             </div>
@@ -855,19 +950,23 @@
         </div>
     </div>
 </div>
-<div id="createVideoProfile" class="w3-modal">
+<div id="videoProfileDialog" class="w3-modal">
     <div class="w3-modal-content">
         <div class="w3-container w3-white">
-            <span onclick="document.getElementById('createVideoProfile').style.display='none'"
+            <span onclick="closeVideoProfileDialog()"
                   class="w3-button w3-display-topright">&times;</span>
             <div class="modalBodyStack">
+                <h3 id="videoProfileDialogTitle">Create Profile</h3>
+                <input type="hidden" id="videoProfileDialogMode" value="create">
+                <input type="hidden" id="videoProfileDialogSourceId" value="">
                 <div>
-                    <label for="newProfileName">Profile Name</label>
-                    <input class="w3-input" type="text" id="newProfileName">
+                    <label for="videoProfileNameInput">Profile Name</label>
+                    <input class="w3-input" type="text" id="videoProfileNameInput">
                 </div>
                 <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
-                        onclick="createProfile('newProfileName');document.getElementById('createVideoProfile').style.display='none';">
-                    Create Profile
+                        id="videoProfileDialogSubmit"
+                        onclick="submitVideoProfileDialog()">
+                    Create
                 </button>
             </div>
         </div>

@@ -10,7 +10,8 @@ const {
     Menu,
     powerMonitor,
     Notification,
-    globalShortcut
+    globalShortcut,
+    clipboard
 } = require('electron');
 const {exec, execFile, execFileSync} = require('child_process');
 const bundledVideos = require("./videos.json");
@@ -90,6 +91,132 @@ const appWikiUrl = `${appRepoUrl}/wiki`;
 const appLicenseUrl = `${appRepoUrl}/blob/HEAD/LICENSE`;
 const MAX_VIDEO_HISTORY = 150;
 const LIFECYCLE_LOG_FILE = "aerial-lifecycle.log";
+const DEBUG_LOG_FILE = "aerial-debug.log";
+const MAX_LIFECYCLE_LOG_BYTES = 50 * 1024 * 1024;
+const MAX_DEBUG_LOG_BYTES = 100 * 1024 * 1024;
+const CONFIG_BACKUP_DIR_NAME = "config-backups";
+const CONFIG_FILE_FILTERS = [{name: "Aerial Config", extensions: ["json"]}];
+const EXPORTED_CONFIG_EXCLUDED_KEYS = new Set([
+    "configured",
+    "version",
+    "numDisplays",
+    "repositoryUrl",
+    "releasesUrl",
+    "wikiUrl",
+    "licenseUrl",
+    "upstreamRepositoryUrl",
+    "updateAvailable",
+    "latestReleaseVersion",
+    "latestReleasePublishedAt",
+    "latestReleaseNotes",
+    "latestReleaseUrl",
+    "latestReleaseName",
+    "videoCacheSize",
+    "downloadedVideos",
+    "videoCatalog",
+    "astronomy",
+    "lastConfigBackupPath",
+    "lastConfigBackupCreatedAt"
+]);
+
+function appendBoundedLogLine(fileName, line, maxBytes) {
+    const logPath = path.join(app.getPath('userData'), fileName);
+    const payload = `${line}\n`;
+    try {
+        const currentSize = fs.existsSync(logPath) ? fs.statSync(logPath).size : 0;
+        const payloadBytes = Buffer.byteLength(payload, "utf8");
+        if (currentSize + payloadBytes > maxBytes) {
+            const allowedBytes = Math.max(0, maxBytes - payloadBytes);
+            if (allowedBytes === 0) {
+                fs.writeFileSync(logPath, "");
+            } else {
+                const start = Math.max(0, currentSize - allowedBytes);
+                const fd = fs.openSync(logPath, "r");
+                try {
+                    const buffer = Buffer.alloc(allowedBytes);
+                    const bytesRead = fs.readSync(fd, buffer, 0, allowedBytes, start);
+                    let tail = buffer.subarray(0, bytesRead).toString("utf8");
+                    const firstNewline = tail.indexOf("\n");
+                    if (start > 0 && firstNewline !== -1) {
+                        tail = tail.slice(firstNewline + 1);
+                    }
+                    fs.writeFileSync(logPath, tail, "utf8");
+                } finally {
+                    fs.closeSync(fd);
+                }
+            }
+        }
+    } catch {
+        // best-effort diagnostics only
+    }
+    fs.appendFileSync(logPath, payload);
+}
+
+function getLogFilePath(fileName) {
+    return path.join(app.getPath('userData'), fileName);
+}
+
+function getLogSummary(fileName) {
+    const logPath = getLogFilePath(fileName);
+    if (!fs.existsSync(logPath)) {
+        return {
+            fileName,
+            path: logPath,
+            exists: false,
+            size: 0,
+            modifiedAt: ""
+        };
+    }
+    const stats = fs.statSync(logPath);
+    return {
+        fileName,
+        path: logPath,
+        exists: true,
+        size: stats.size,
+        modifiedAt: stats.mtime.toISOString()
+    };
+}
+
+function getLogDiagnostics() {
+    return {
+        lifecycle: getLogSummary(LIFECYCLE_LOG_FILE),
+        playback: getLogSummary(DEBUG_LOG_FILE)
+    };
+}
+
+function openLogFile(fileName) {
+    const logPath = getLogFilePath(fileName);
+    if (fs.existsSync(logPath)) {
+        shell.openPath(logPath);
+        return;
+    }
+    shell.openExternal(app.getPath('userData'));
+}
+
+function deleteLogFile(fileName) {
+    const logPath = getLogFilePath(fileName);
+    if (fs.existsSync(logPath)) {
+        fs.unlinkSync(logPath);
+    }
+}
+
+function clearLogFile(fileName) {
+    fs.writeFileSync(getLogFilePath(fileName), "", "utf8");
+}
+
+function runStartupMigrations(previousVersion) {
+    if (!previousVersion) {
+        return;
+    }
+    if (compareSemver(previousVersion, "1.3.8") < 0 && compareSemver(app.getVersion(), "1.3.8") >= 0) {
+        try {
+            deleteLogFile(LIFECYCLE_LOG_FILE);
+            deleteLogFile(DEBUG_LOG_FILE);
+        } catch {
+            // best-effort cleanup only
+        }
+    }
+}
 
 function logLifecycle(eventName, details) {
     let detailText = "";
@@ -103,8 +230,7 @@ function logLifecycle(eventName, details) {
     const line = `${new Date().toISOString()} [lifecycle] ${eventName}${detailText}`;
     console.log(line);
     try {
-        const userData = app.getPath('userData');
-        fs.appendFileSync(path.join(userData, LIFECYCLE_LOG_FILE), `${line}\n`);
+        appendBoundedLogLine(LIFECYCLE_LOG_FILE, line, MAX_LIFECYCLE_LOG_BYTES);
     } catch {
         // best-effort diagnostics only
     }
@@ -169,6 +295,14 @@ function syncWindowsUninstallRegistration() {
     }
 }
 
+function broadcastRendererEvent(channel, ...args) {
+    for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+            win.webContents.send(channel, ...args);
+        }
+    }
+}
+
 function setRepositoryMetadata() {
     store.set('repositoryUrl', appRepoUrl);
     store.set('releasesUrl', appReleasesUrl);
@@ -213,6 +347,279 @@ function syncVideoCatalog() {
     store.set("extraVideos", extras);
     store.set("videoCatalog", catalog);
     return catalog;
+}
+
+function createRuntimeId(prefix = "id") {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function getKnownCatalogVideoIds() {
+    return new Set(getVideoCatalog().map((video) => video.id));
+}
+
+function sanitizeProfileVideoIds(videoIds) {
+    const knownIds = getKnownCatalogVideoIds();
+    if (!Array.isArray(videoIds)) {
+        return [];
+    }
+    return Array.from(new Set(videoIds.filter((videoId) => (
+        typeof videoId === "string" &&
+        !videoId.startsWith("_") &&
+        knownIds.has(videoId)
+    ))));
+}
+
+function sanitizeFavoriteVideoIds(videoIds) {
+    const knownIds = getKnownCatalogVideoIds();
+    if (!Array.isArray(videoIds)) {
+        return [];
+    }
+    return Array.from(new Set(videoIds.filter((videoId) => (
+        typeof videoId === "string" &&
+        knownIds.has(videoId)
+    ))));
+}
+
+function normalizeVideoProfiles(profiles) {
+    const source = Array.isArray(profiles) ? profiles : [];
+    const usedIds = new Set();
+    return source.map((profile, index) => {
+        const normalized = profile && typeof profile === "object" ? profile : {};
+        let id = typeof normalized.id === "string" ? normalized.id.trim() : "";
+        if (!id || usedIds.has(id)) {
+            id = createRuntimeId("profile");
+        }
+        usedIds.add(id);
+        const name = String(normalized.name ?? "").trim() || `Profile ${index + 1}`;
+        return {
+            id,
+            name,
+            videos: sanitizeProfileVideoIds(normalized.videos)
+        };
+    });
+}
+
+function syncVideoProfiles() {
+    const profiles = normalizeVideoProfiles(store.get("videoProfiles") ?? []);
+    store.set("videoProfiles", profiles);
+    let defaultId = String(store.get("videoProfileDefaultId") ?? "").trim();
+    if (!profiles.some((profile) => profile.id === defaultId)) {
+        defaultId = "";
+    }
+    store.set("videoProfileDefaultId", defaultId);
+    store.set("videoProfileAutoApplyOnLaunch", store.get("videoProfileAutoApplyOnLaunch") ?? false);
+    return profiles;
+}
+
+function getDefaultVideoProfile() {
+    const profiles = syncVideoProfiles();
+    const defaultId = String(store.get("videoProfileDefaultId") ?? "").trim();
+    return profiles.find((profile) => profile.id === defaultId) ?? null;
+}
+
+function applyDefaultVideoProfileOnLaunch() {
+    if (!store.get("videoProfileAutoApplyOnLaunch")) {
+        return false;
+    }
+    const profile = getDefaultVideoProfile();
+    if (!profile) {
+        return false;
+    }
+    const customAllowed = (store.get("allowedVideos") ?? []).filter((videoId) => typeof videoId === "string" && videoId.startsWith("_"));
+    const merged = Array.from(new Set([...profile.videos, ...customAllowed]));
+    store.set("allowedVideos", merged);
+    allowedVideos = merged;
+    return true;
+}
+
+function getConfigExportData() {
+    const snapshot = JSON.parse(JSON.stringify(store.store ?? {}));
+    for (const key of EXPORTED_CONFIG_EXCLUDED_KEYS) {
+        delete snapshot[key];
+    }
+    return snapshot;
+}
+
+function buildConfigPayload(reason) {
+    return {
+        app: "Aerial",
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        reason,
+        version: app.getVersion(),
+        config: getConfigExportData()
+    };
+}
+
+function writeJsonFile(filePath, payload) {
+    fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+}
+
+function getConfigBackupDirectory() {
+    const backupDirectory = path.join(app.getPath("userData"), CONFIG_BACKUP_DIR_NAME);
+    fs.mkdirSync(backupDirectory, {recursive: true});
+    return backupDirectory;
+}
+
+function createConfigBackup(reason = "manual") {
+    const backupDirectory = getConfigBackupDirectory();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const filePath = path.join(backupDirectory, `aerial-config-backup-${timestamp}.json`);
+    const payload = buildConfigPayload(reason);
+    writeJsonFile(filePath, payload);
+    store.set("lastConfigBackupPath", filePath);
+    store.set("lastConfigBackupCreatedAt", payload.exportedAt);
+    return {
+        filePath,
+        createdAt: payload.exportedAt,
+        reason
+    };
+}
+
+function getBackupSummary() {
+    const backupDirectory = getConfigBackupDirectory();
+    const files = fs.readdirSync(backupDirectory)
+        .filter((fileName) => fileName.toLowerCase().endsWith(".json"))
+        .map((fileName) => {
+            const filePath = path.join(backupDirectory, fileName);
+            const stats = fs.statSync(filePath);
+            return {
+                fileName,
+                filePath,
+                createdAt: stats.mtime.toISOString(),
+                size: stats.size
+            };
+        })
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    return {
+        directory: backupDirectory,
+        totalBackups: files.length,
+        latestBackup: files[0] ?? null
+    };
+}
+
+function loadConfigPayloadFromFile(filePath) {
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    const config = parsed && typeof parsed === "object" && !Array.isArray(parsed) && parsed.config && typeof parsed.config === "object"
+        ? parsed.config
+        : parsed;
+    if (!config || typeof config !== "object" || Array.isArray(config)) {
+        throw new Error("The selected file does not contain a valid Aerial config export.");
+    }
+    return config;
+}
+
+function importConfigPayload(config) {
+    store.clear();
+    for (const [key, value] of Object.entries(config)) {
+        store.set(key, value);
+    }
+    setUpConfigFile();
+    calculateAstronomy();
+    cachePath = store.get("cachePath") ?? path.join(app.getPath("userData"), "videos");
+    allowedVideos = store.get("allowedVideos") ?? [];
+}
+
+function getDownloadableCatalog() {
+    return getVideoCatalog().filter((video) => !!getVideoSource(video, store.get("videoFileType")));
+}
+
+function getCacheDiagnostics() {
+    const downloadableCatalog = getDownloadableCatalog();
+    const downloadableById = new Map(downloadableCatalog.map((video) => [video.id, video]));
+    const targetIds = Array.from(new Set(getVideosToDownload().filter((videoId) => downloadableById.has(videoId))));
+    const targetSet = new Set(targetIds);
+    const cacheFiles = getAllFilesInCache()
+        .filter((fileName) => fileName.toLowerCase().endsWith(".mov"))
+        .map((fileName) => ({
+            fileName,
+            id: fileName.slice(0, -4)
+        }));
+    const downloadedIds = cacheFiles.map((entry) => entry.id).filter((videoId) => downloadableById.has(videoId));
+    const downloadedSet = new Set(downloadedIds);
+    const missingIds = targetIds.filter((videoId) => !downloadedSet.has(videoId));
+    const staleIds = downloadedIds.filter((videoId) => !targetSet.has(videoId));
+    const orphanedIds = cacheFiles.map((entry) => entry.id).filter((videoId) => !downloadableById.has(videoId));
+    const categoryMap = new Map();
+
+    for (const video of downloadableCatalog) {
+        const key = video.type || "other";
+        if (!categoryMap.has(key)) {
+            categoryMap.set(key, {
+                key,
+                label: key.charAt(0).toUpperCase() + key.slice(1),
+                total: 0,
+                downloaded: 0,
+                missing: 0
+            });
+        }
+    }
+
+    for (const targetId of targetIds) {
+        const video = downloadableById.get(targetId);
+        if (!video) {
+            continue;
+        }
+        const entry = categoryMap.get(video.type || "other");
+        entry.total += 1;
+        if (downloadedSet.has(targetId)) {
+            entry.downloaded += 1;
+        } else {
+            entry.missing += 1;
+        }
+    }
+
+    return {
+        cachePath,
+        cacheSize: getCacheSize(),
+        cachedCount: downloadedIds.length,
+        targetCount: targetIds.length,
+        missingCount: missingIds.length,
+        staleCount: staleIds.length,
+        orphanedCount: orphanedIds.length,
+        downloadedIds,
+        missingIds,
+        staleIds,
+        orphanedIds,
+        categoryStats: Array.from(categoryMap.values()).filter((entry) => entry.total > 0)
+    };
+}
+
+function removeOrphanedVideosInCache() {
+    const orphanedIds = getCacheDiagnostics().orphanedIds;
+    for (const videoId of orphanedIds) {
+        const filePath = path.join(cachePath, `${videoId}.mov`);
+        if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+        }
+    }
+    updateVideoCache();
+}
+
+function buildDiagnosticsText() {
+    const diagnostics = getCacheDiagnostics();
+    const latestReleaseVersion = store.get("latestReleaseVersion") || "Unknown";
+    return [
+        `Aerial diagnostics`,
+        `Generated: ${new Date().toISOString()}`,
+        `Installed version: ${app.getVersion()}`,
+        `Latest release: ${latestReleaseVersion}`,
+        `Platform: ${process.platform} ${process.arch}`,
+        `Electron: ${process.versions.electron}`,
+        `Chrome: ${process.versions.chrome}`,
+        `Node: ${process.versions.node}`,
+        `User data: ${app.getPath("userData")}`,
+        `Cache path: ${diagnostics.cachePath}`,
+        `Cache size bytes: ${diagnostics.cacheSize}`,
+        `Cached videos: ${diagnostics.cachedCount}`,
+        `Expected cached videos: ${diagnostics.targetCount}`,
+        `Missing cached videos: ${diagnostics.missingCount}`,
+        `Stale cached videos: ${diagnostics.staleCount}`,
+        `Orphaned cached files: ${diagnostics.orphanedCount}`,
+        `Config backups: ${getBackupSummary().totalBackups}`,
+        `Default profile id: ${store.get("videoProfileDefaultId") || "(none)"}`,
+        `Auto-apply default profile: ${store.get("videoProfileAutoApplyOnLaunch") ? "yes" : "no"}`
+    ].join("\n");
 }
 
 //initialize variables
@@ -863,6 +1270,8 @@ bootstrap().catch((error) => {
 });
 
 function startUp() {
+    const previousVersion = String(store.get("version") ?? "").trim();
+    runStartupMigrations(previousVersion);
     cachePath = store.get('cachePath') ?? path.join(app.getPath('userData'), "videos");
     allowedVideos = store.get("allowedVideos") ?? [];
 
@@ -891,6 +1300,7 @@ function startUp() {
         // Keep runtime metadata and merged catalog current even between releases.
         setUpConfigFile();
     }
+    applyDefaultVideoProfileOnLaunch();
     calculateAstronomy();
     checkForUpdate();
     setupGlobalShortcut();
@@ -949,9 +1359,10 @@ function setUpConfigFile() {
     store.set('allowedVideos', (store.get('allowedVideos') ?? []).filter((videoId) => typeof videoId === "string" && (videoId.startsWith("_") || knownVideoIds.has(videoId))));
     store.set('alwaysDownloadVideos', (store.get('alwaysDownloadVideos') ?? []).filter((videoId) => knownVideoIds.has(videoId)));
     store.set('neverDownloadVideos', (store.get('neverDownloadVideos') ?? []).filter((videoId) => knownVideoIds.has(videoId)));
+    store.set('favoriteVideos', sanitizeFavoriteVideoIds(store.get('favoriteVideos') ?? []));
     store.set('downloadedVideos', store.get('downloadedVideos') ?? []);
-    store.set('videoProfiles', store.get('videoProfiles') ?? []);
     store.set('customVideos', store.get('customVideos') ?? []);
+    syncVideoProfiles();
 
     //start up settings
     store.set('useTray', store.get('useTray') ?? true);
@@ -964,6 +1375,13 @@ function setUpConfigFile() {
     store.set('runOnBattery', store.get('runOnBattery') ?? true);
     store.set('disableWhenFullscreenAppActive', store.get('disableWhenFullscreenAppActive') ?? true);
     store.set('updateAvailable', false);
+    store.set('latestReleaseVersion', store.get('latestReleaseVersion') ?? app.getVersion());
+    store.set('latestReleasePublishedAt', store.get('latestReleasePublishedAt') ?? "");
+    store.set('latestReleaseNotes', store.get('latestReleaseNotes') ?? "");
+    store.set('latestReleaseUrl', store.get('latestReleaseUrl') ?? appReleasesUrl);
+    store.set('latestReleaseName', store.get('latestReleaseName') ?? "");
+    store.set('lastConfigBackupPath', store.get('lastConfigBackupPath') ?? "");
+    store.set('lastConfigBackupCreatedAt', store.get('lastConfigBackupCreatedAt') ?? "");
     setRepositoryMetadata();
     store.set('debugPlayback', store.get('debugPlayback') ?? false);
     store.set('configTheme', store.get('configTheme') ?? "dark");
@@ -1104,55 +1522,52 @@ function setUpConfigFile() {
 //check for update on GitHub
 function checkForUpdate() {
     store.set('updateAvailable', false);
-    if (!app.isPackaged) {
-        return;
-    }
-
-    const branches = ["main", "master"];
-    const fetchBranchPackage = (index) => {
-        if (index >= branches.length) {
-            console.log(`Error checking for updates: unable to read package.json from ${appRepoUrl} (main/master).`);
+    const releaseUrl = `https://api.github.com/repos/${appRepo}/releases/latest`;
+    const request = https.get(releaseUrl, {
+        headers: {
+            "User-Agent": "Aerial",
+            "Accept": "application/vnd.github+json"
+        }
+    }, (response) => {
+        if (response.statusCode !== 200) {
+            response.resume();
+            console.log(`Error checking for updates: GitHub releases API returned ${response.statusCode}.`);
             return;
         }
 
-        const branch = branches[index];
-        const packageUrl = `https://raw.githubusercontent.com/${appRepo}/${branch}/package.json`;
-        https.get(packageUrl, (response) => {
-            if (response.statusCode !== 200) {
-                response.resume();
-                fetchBranchPackage(index + 1);
-                return;
-            }
-
-            let body = '';
-            response.setEncoding('utf8');
-            response.on('data', (chunk) => {
-                body += chunk;
-            });
-
-            response.on('end', () => {
-                try {
-                    const onlinePackage = JSON.parse(body);
-                    if (!onlinePackage.version) {
-                        return;
-                    }
-                    if (compareSemver(onlinePackage.version, app.getVersion()) > 0) {
-                        store.set('updateAvailable', onlinePackage.version);
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+            body += chunk;
+        });
+        response.on("end", () => {
+            try {
+                const release = JSON.parse(body);
+                const latestVersion = String(release.tag_name ?? release.name ?? "").replace(/^v/i, "").trim();
+                store.set("latestReleaseVersion", latestVersion || app.getVersion());
+                store.set("latestReleasePublishedAt", release.published_at ?? "");
+                store.set("latestReleaseNotes", String(release.body ?? "").trim());
+                store.set("latestReleaseUrl", release.html_url ?? appReleasesUrl);
+                store.set("latestReleaseName", release.name ?? release.tag_name ?? "");
+                if (latestVersion && compareSemver(latestVersion, app.getVersion()) > 0) {
+                    store.set('updateAvailable', latestVersion);
+                    if (app.isPackaged) {
                         new Notification({
                             title: "An update for Aerial is available",
-                            body: `Version ${onlinePackage.version} is available for download. Visit ${appReleasesUrl} to update Aerial.`
+                            body: `Version ${latestVersion} is available for download. Visit ${appReleasesUrl} to update Aerial.`
                         }).show();
                     }
-                } catch (error) {
-                    console.log("Error parsing update response:", error);
                 }
-            });
-        }).on('error', () => {
-            fetchBranchPackage(index + 1);
+                broadcastRendererEvent("displaySettings");
+            } catch (error) {
+                console.log("Error parsing update response:", error);
+            }
         });
-    };
+    });
 
-    fetchBranchPackage(0);
+    request.on("error", (error) => {
+        console.log("Error checking for updates:", error?.message ?? error);
+    });
 }
 
 //events from browser windows
@@ -1210,12 +1625,121 @@ ipcMain.on('openConfigFolder', (event) => {
 });
 
 ipcMain.on('openPlaybackLog', () => {
-    const logPath = path.join(app.getPath('userData'), "aerial-debug.log");
-    if (fs.existsSync(logPath)) {
-        shell.openPath(logPath);
-        return;
+    openLogFile(DEBUG_LOG_FILE);
+});
+
+ipcMain.on('openLifecycleLog', () => {
+    openLogFile(LIFECYCLE_LOG_FILE);
+});
+
+ipcMain.handle('getCacheDiagnostics', () => {
+    return {
+        ...getCacheDiagnostics(),
+        backups: getBackupSummary()
+    };
+});
+
+ipcMain.handle('getLogDiagnostics', () => {
+    return getLogDiagnostics();
+});
+
+ipcMain.handle('clearLogs', (_event, target = "all") => {
+    switch (target) {
+        case "lifecycle":
+            clearLogFile(LIFECYCLE_LOG_FILE);
+            break;
+        case "playback":
+            clearLogFile(DEBUG_LOG_FILE);
+            break;
+        case "all":
+            clearLogFile(LIFECYCLE_LOG_FILE);
+            clearLogFile(DEBUG_LOG_FILE);
+            break;
+        default:
+            throw new Error(`Unsupported log action: ${target}`);
     }
-    shell.openExternal(app.getPath('userData'));
+    return getLogDiagnostics();
+});
+
+ipcMain.handle('manageCache', async (event, action) => {
+    switch (action) {
+        case "downloadSelectedNow":
+            if (!downloading) {
+                downloadVideos();
+            }
+            break;
+        case "removeUncheckedNow":
+            removeAllUnallowedVideosInCache();
+            removeAllNeverAllowedVideosInCache();
+            break;
+        case "removeOrphanedNow":
+            removeOrphanedVideosInCache();
+            break;
+        default:
+            throw new Error(`Unsupported cache action: ${action}`);
+    }
+    return getCacheDiagnostics();
+});
+
+ipcMain.handle('exportConfig', async (event) => {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const result = await dialog.showSaveDialog(ownerWindow, {
+        title: "Export Aerial Settings",
+        defaultPath: path.join(app.getPath("documents"), `aerial-config-${app.getVersion()}.json`),
+        filters: CONFIG_FILE_FILTERS
+    });
+    if (result.canceled || !result.filePath) {
+        return {canceled: true};
+    }
+    writeJsonFile(result.filePath, buildConfigPayload("export"));
+    return {
+        canceled: false,
+        filePath: result.filePath
+    };
+});
+
+ipcMain.handle('createConfigBackup', () => {
+    const backup = createConfigBackup("manual");
+    return {
+        canceled: false,
+        backup,
+        backups: getBackupSummary()
+    };
+});
+
+ipcMain.handle('importConfig', async (event, mode = "import") => {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const defaultDirectory = mode === "restoreBackup"
+        ? getConfigBackupDirectory()
+        : app.getPath("documents");
+    const result = await dialog.showOpenDialog(ownerWindow, {
+        title: mode === "restoreBackup" ? "Restore Aerial Backup" : "Import Aerial Settings",
+        defaultPath: defaultDirectory,
+        properties: ["openFile"],
+        filters: CONFIG_FILE_FILTERS
+    });
+    if (result.canceled || !result.filePaths[0]) {
+        return {canceled: true};
+    }
+
+    const backup = createConfigBackup(mode === "restoreBackup" ? "before-restore" : "before-import");
+    const config = loadConfigPayloadFromFile(result.filePaths[0]);
+    importConfigPayload(config);
+    return {
+        canceled: false,
+        filePath: result.filePaths[0],
+        backup,
+        backups: getBackupSummary()
+    };
+});
+
+ipcMain.handle('copyDiagnostics', () => {
+    const text = buildDiagnosticsText();
+    clipboard.writeText(text);
+    return {
+        copied: true,
+        text
+    };
 });
 
 ipcMain.on('selectCustomLocation', async (event, arg) => {
@@ -1305,8 +1829,8 @@ ipcMain.on('refreshConfig', (event) => {
 });
 
 ipcMain.on('resetConfig', (event) => {
-    fs.unlink(`${app.getPath('userData')}/config.json`, err => {
-    });
+    createConfigBackup("before-reset");
+    store.clear();
     setUpConfigFile();
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
     if (senderWindow && !senderWindow.isDestroyed()) {
@@ -1392,8 +1916,11 @@ ipcMain.on('consoleLog', (event, msg) => {
     const line = `${new Date().toISOString()} ${msg}`;
     console.log(line);
     if (store.get('debugPlayback')) {
-        fs.appendFile(path.join(app.getPath('userData'), "aerial-debug.log"), `${line}\n`, () => {
-        });
+        try {
+            appendBoundedLogLine(DEBUG_LOG_FILE, line, MAX_DEBUG_LOG_BYTES);
+        } catch {
+            // best-effort diagnostics only
+        }
     }
 });
 

@@ -15,7 +15,7 @@ function storeSetSync(key, value) {
 contextBridge.exposeInMainWorld("electron", {
     ipcRenderer: {
         send: (channel, data) => {
-            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "consoleLog"];
+            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "consoleLog"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.send(channel, data);
             }
@@ -27,7 +27,7 @@ contextBridge.exposeInMainWorld("electron", {
             }
         },
         invoke: (channel, args) => {
-            const validChannels = ["newVideoId"];
+            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics"];
             if (validChannels.includes(channel)) {
                 return ipcRenderer.invoke(channel, args);
             }

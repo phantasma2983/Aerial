@@ -8,9 +8,23 @@ let allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
 let alwaysDownloadVideos = electron.store.get("alwaysDownloadVideos");
 let neverDownloadVideos = electron.store.get("neverDownloadVideos");
+let favoriteVideos = electron.store.get("favoriteVideos") ?? [];
 let customVideos = electron.store.get("customVideos");
 let extraVideos = electron.store.get("extraVideos") ?? [];
 let fontList = [];
+let selectedVideoIndex = -1;
+let videoSearchQuery = "";
+let videoQuickFilters = {
+    checkedOnly: false,
+    downloadedOnly: false,
+    favoritesOnly: false,
+    userAddedOnly: false,
+    type: "all"
+};
+let latestCacheDiagnostics = null;
+let cacheDiagnosticsRefreshToken = 0;
+let latestLogDiagnostics = null;
+let pendingProfileSelectionId = "";
 refreshVideoCatalog();
 
 function refreshVideoCatalog() {
@@ -39,8 +53,23 @@ function refreshVideoCatalog() {
     videos = merged;
 }
 
+function syncRendererState() {
+    videos = electron.store.get("videoCatalog") ?? electron.videos;
+    allowedVideos = electron.store.get("allowedVideos") ?? [];
+    downloadedVideos = electron.store.get("downloadedVideos") ?? [];
+    alwaysDownloadVideos = electron.store.get("alwaysDownloadVideos") ?? [];
+    neverDownloadVideos = electron.store.get("neverDownloadVideos") ?? [];
+    favoriteVideos = electron.store.get("favoriteVideos") ?? [];
+    customVideos = electron.store.get("customVideos") ?? [];
+    extraVideos = electron.store.get("extraVideos") ?? [];
+    refreshVideoCatalog();
+    favoriteVideos = favoriteVideos.filter((videoId) => videos.some((video) => video.id === videoId));
+    electron.store.set("favoriteVideos", favoriteVideos);
+}
+
 //Updates all the <input> tags with their proper values. Called on page load
 function displaySettings() {
+    syncRendererState();
     let checked = ["timeOfDay", "skipVideosWithKey", "sameVideoOnScreens", "videoCache", "videoCacheProfiles", "videoCacheRemoveUnallowed", "avoidDuplicateVideos", "onlyShowVideoOnPrimaryMonitor", "videoQuality", "debugPlayback", "immediatelyUpdateVideoCache", "useTray", "blankScreen", "sleepAfterBlank", "lockAfterRun", "alternateRenderMethod", "alternateRenderAuto", "useLocationForSunrise", "runOnBattery", "disableWhenFullscreenAppActive", "enableGlobalShortcut"];
     for (let i = 0; i < checked.length; i++) {
         $(`#${checked[i]}`).prop('checked', electron.store.get(checked[i]));
@@ -75,6 +104,11 @@ function displaySettings() {
     colorTextPositionRadio();
     syncSelectedTextPositionOptions();
     updateSettingVisibility();
+    renderAboutPanel();
+    refreshCacheDiagnostics();
+    refreshLogDiagnostics();
+    makeList();
+    selectVideo(selectedVideoIndex >= 0 ? selectedVideoIndex : -1);
 
     //display update, if there is one
     //console.log(electron.store.get('updateAvailable'));
@@ -114,6 +148,7 @@ function bindAboutLinks() {
         {id: "repoLink", href: repositoryUrl},
         {id: "welcomeRepoLink", href: repositoryUrl},
         {id: "releaseLink", href: releasesUrl},
+        {id: "openReleasePageButton", href: releasesUrl},
         {id: "wikiLink", href: wikiUrl},
         {id: "licenseLink", href: licenseUrl},
         {id: "upstreamRepoLink", href: upstreamRepositoryUrl}
@@ -126,6 +161,288 @@ function bindAboutLinks() {
                 element.href = link.href;
             }
         }
+    }
+}
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+}
+
+function formatDisplayDate(value) {
+    if (!value) {
+        return "Unavailable";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+        return "Unavailable";
+    }
+    return date.toLocaleString();
+}
+
+function summarizeReleaseNotes(notes) {
+    const lines = String(notes ?? "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    if (lines.length === 0) {
+        return "No release notes were published for the latest release.";
+    }
+    return lines.slice(0, 8).join("\n");
+}
+
+function renderAboutPanel() {
+    const installedVersion = electron.store.get("version") ?? "Unknown";
+    const latestVersion = electron.store.get("latestReleaseVersion") ?? installedVersion;
+    const publishedAt = electron.store.get("latestReleasePublishedAt");
+    const releaseNotes = summarizeReleaseNotes(electron.store.get("latestReleaseNotes"));
+    const releaseNotesElement = document.getElementById("latestReleaseNotes");
+    const latestVersionElement = document.getElementById("latestReleaseVersion");
+    const latestPublishedElement = document.getElementById("latestReleasePublishedAt");
+    const diagnosticsStatus = document.getElementById("diagnosticsCopyStatus");
+    if (latestVersionElement) {
+        latestVersionElement.textContent = latestVersion;
+    }
+    if (latestPublishedElement) {
+        latestPublishedElement.textContent = formatDisplayDate(publishedAt);
+    }
+    if (releaseNotesElement) {
+        releaseNotesElement.textContent = releaseNotes;
+    }
+    const installedElement = document.getElementById("installedVersion");
+    if (installedElement) {
+        installedElement.textContent = installedVersion;
+    }
+    if (diagnosticsStatus) {
+        diagnosticsStatus.textContent = "";
+    }
+}
+
+function renderBackupSummary(backups) {
+    const backupInfo = document.getElementById("configBackupSummary");
+    if (!backupInfo) {
+        return;
+    }
+    if (!backups) {
+        backupInfo.innerHTML = `<p class="w3-small">Backup information is unavailable.</p>`;
+        return;
+    }
+    if (!backups.latestBackup) {
+        backupInfo.innerHTML = `<p class="w3-small">No backups created yet. Manual backups are stored in <code>${escapeHtml(backups.directory)}</code>.</p>`;
+        return;
+    }
+    backupInfo.innerHTML = `<div class="infoGrid">
+            <div><span class="infoLabel">Backup folder</span><span class="infoValue">${escapeHtml(backups.directory)}</span></div>
+            <div><span class="infoLabel">Saved backups</span><span class="infoValue">${backups.totalBackups}</span></div>
+            <div><span class="infoLabel">Latest backup</span><span class="infoValue">${escapeHtml(backups.latestBackup.fileName)}</span></div>
+            <div><span class="infoLabel">Created</span><span class="infoValue">${escapeHtml(formatDisplayDate(backups.latestBackup.createdAt))}</span></div>
+        </div>`;
+}
+
+
+function formatLogSummary(log) {
+    if (!log?.exists) {
+        return "Not created yet";
+    }
+    return `${numeral(log.size).format("0.00 ib")} | ${formatDisplayDate(log.modifiedAt)}`;
+}
+
+function renderLogDiagnostics(diagnostics) {
+    latestLogDiagnostics = diagnostics;
+    const summary = document.getElementById("logManagerSummary");
+    if (!summary) {
+        return;
+    }
+    if (!diagnostics) {
+        summary.innerHTML = `<p class="w3-small">Log diagnostics are unavailable.</p>`;
+        return;
+    }
+    summary.innerHTML = `<div class="infoGrid logManagerGrid">
+            <div>
+                <span class="infoLabel">Lifecycle Log</span>
+                <span class="infoValue">${escapeHtml(formatLogSummary(diagnostics.lifecycle))}</span>
+                <span class="infoSubvalue">${escapeHtml(diagnostics.lifecycle?.path ?? "")}</span>
+            </div>
+            <div>
+                <span class="infoLabel">Playback Log</span>
+                <span class="infoValue">${escapeHtml(formatLogSummary(diagnostics.playback))}</span>
+                <span class="infoSubvalue">${escapeHtml(diagnostics.playback?.path ?? "")}</span>
+            </div>
+        </div>`;
+}
+
+async function refreshLogDiagnostics() {
+    try {
+        const diagnostics = await electron.ipcRenderer.invoke("getLogDiagnostics");
+        renderLogDiagnostics(diagnostics);
+    } catch (error) {
+        const summary = document.getElementById("logManagerSummary");
+        if (summary) {
+            summary.innerHTML = `<p class="w3-small">Unable to load log diagnostics: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+}
+
+async function clearLogs(target) {
+    const labelMap = {
+        lifecycle: "Clear the lifecycle log?",
+        playback: "Clear the playback log?",
+        all: "Clear both log files?"
+    };
+    if (labelMap[target] && !confirm(labelMap[target])) {
+        return;
+    }
+    const diagnostics = await electron.ipcRenderer.invoke("clearLogs", target);
+    renderLogDiagnostics(diagnostics);
+}
+
+function formatVideoIdList(ids) {
+    if (!Array.isArray(ids) || ids.length === 0) {
+        return "None";
+    }
+    const shown = ids.slice(0, 6).map((id) => escapeHtml(id)).join(", ");
+    return ids.length > 6 ? `${shown}, +${ids.length - 6} more` : shown;
+}
+
+function renderCacheDiagnostics(diagnostics) {
+    latestCacheDiagnostics = diagnostics;
+    const summary = document.getElementById("cacheManagerSummary");
+    const categoryTable = document.getElementById("cacheCategoryStats");
+    const fileState = document.getElementById("cacheFileStates");
+    if (!summary || !categoryTable || !fileState) {
+        return;
+    }
+    summary.innerHTML = `<div class="statsCardGrid">
+            <div class="statsCard"><span class="statsLabel">Cached</span><span class="statsValue">${diagnostics.cachedCount}</span></div>
+            <div class="statsCard"><span class="statsLabel">Expected</span><span class="statsValue">${diagnostics.targetCount}</span></div>
+            <div class="statsCard"><span class="statsLabel">Missing</span><span class="statsValue">${diagnostics.missingCount}</span></div>
+            <div class="statsCard"><span class="statsLabel">Orphaned</span><span class="statsValue">${diagnostics.orphanedCount}</span></div>
+        </div>
+        <div class="infoGrid compactInfoGrid">
+            <div><span class="infoLabel">Cache size</span><span class="infoValue">${numeral(diagnostics.cacheSize).format("0.00 ib")}</span></div>
+            <div><span class="infoLabel">Cache path</span><span class="infoValue">${escapeHtml(diagnostics.cachePath)}</span></div>
+        </div>`;
+
+    if ((diagnostics.categoryStats ?? []).length === 0) {
+        categoryTable.innerHTML = `<p class="w3-small">No downloadable videos are currently selected for cache tracking.</p>`;
+    } else {
+        categoryTable.innerHTML = `<table class="w3-table-all">
+                <tr><th>Category</th><th>Tracked</th><th>Downloaded</th><th>Missing</th></tr>
+                ${diagnostics.categoryStats.map((entry) => `<tr>
+                    <td>${escapeHtml(entry.label)}</td>
+                    <td>${entry.total}</td>
+                    <td>${entry.downloaded}</td>
+                    <td>${entry.missing}</td>
+                </tr>`).join("")}
+            </table>`;
+    }
+
+    fileState.innerHTML = `<div class="infoGrid">
+            <div><span class="infoLabel">Missing IDs</span><span class="infoValue">${formatVideoIdList(diagnostics.missingIds)}</span></div>
+            <div><span class="infoLabel">Stale IDs</span><span class="infoValue">${formatVideoIdList(diagnostics.staleIds)}</span></div>
+            <div><span class="infoLabel">Orphaned IDs</span><span class="infoValue">${formatVideoIdList(diagnostics.orphanedIds)}</span></div>
+        </div>`;
+}
+
+async function refreshCacheDiagnostics() {
+    const refreshToken = ++cacheDiagnosticsRefreshToken;
+    try {
+        const diagnostics = await electron.ipcRenderer.invoke("getCacheDiagnostics");
+        if (refreshToken !== cacheDiagnosticsRefreshToken) {
+            return;
+        }
+        renderCacheDiagnostics(diagnostics);
+        renderBackupSummary(diagnostics.backups);
+    } catch (error) {
+        const summary = document.getElementById("cacheManagerSummary");
+        if (summary) {
+            summary.innerHTML = `<p class="w3-small">Unable to load cache diagnostics: ${escapeHtml(error.message)}</p>`;
+        }
+    }
+}
+
+async function runCacheAction(action, confirmationMessage) {
+    if (confirmationMessage && !confirm(confirmationMessage)) {
+        return;
+    }
+    const diagnostics = await electron.ipcRenderer.invoke("manageCache", action);
+    renderCacheDiagnostics(diagnostics);
+    updateCache();
+}
+
+async function exportSettings() {
+    const result = await electron.ipcRenderer.invoke("exportConfig");
+    if (!result || result.canceled) {
+        return;
+    }
+    alert(`Settings exported to:\n${result.filePath}`);
+}
+
+async function createSettingsBackup() {
+    const result = await electron.ipcRenderer.invoke("createConfigBackup");
+    if (!result || result.canceled) {
+        return;
+    }
+    renderBackupSummary(result.backups);
+    alert(`Backup created:\n${result.backup.filePath}`);
+}
+
+async function importSettings() {
+    const result = await electron.ipcRenderer.invoke("importConfig", "import");
+    if (!result || result.canceled) {
+        return;
+    }
+    alert(`Settings imported from:\n${result.filePath}\n\nA backup of the previous config was saved to:\n${result.backup.filePath}`);
+    window.location.reload();
+}
+
+async function restoreSettingsBackup() {
+    const result = await electron.ipcRenderer.invoke("importConfig", "restoreBackup");
+    if (!result || result.canceled) {
+        return;
+    }
+    alert(`Backup restored from:\n${result.filePath}\n\nA backup of the previous config was saved to:\n${result.backup.filePath}`);
+    window.location.reload();
+}
+
+async function copyDiagnostics() {
+    const result = await electron.ipcRenderer.invoke("copyDiagnostics");
+    const status = document.getElementById("diagnosticsCopyStatus");
+    if (status) {
+        status.textContent = result?.copied ? "Diagnostics copied." : "Diagnostics copy failed.";
+    }
+}
+
+function getUserAddedVideoIdSet() {
+    return new Set((extraVideos ?? []).map((video) => video.id));
+}
+
+function getFavoriteVideoIdSet() {
+    return new Set(favoriteVideos ?? []);
+}
+
+function saveFavoriteVideos(nextFavorites) {
+    favoriteVideos = Array.from(new Set((nextFavorites ?? []).filter((videoId) => videos.some((video) => video.id === videoId))));
+    electron.store.set("favoriteVideos", favoriteVideos);
+}
+
+function toggleFavoriteVideo(videoId) {
+    const favorites = getFavoriteVideoIdSet();
+    if (favorites.has(videoId)) {
+        saveFavoriteVideos(favoriteVideos.filter((id) => id !== videoId));
+    } else {
+        saveFavoriteVideos([...favoriteVideos, videoId]);
+    }
+    makeList();
+    if (selectedVideoIndex >= 0 && getVisibleVideoIndices().includes(selectedVideoIndex)) {
+        selectVideo(selectedVideoIndex);
+    } else {
+        selectedVideoIndex = -1;
+        selectVideo(-1);
     }
 }
 
@@ -994,23 +1311,533 @@ function selectTextSetting(item) {
 
 //Video tab
 
+function createRuntimeId(prefix = "id") {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeVideoProfilesData(profiles) {
+    const source = Array.isArray(profiles) ? profiles : [];
+    const seenIds = new Set();
+    const validVideoIds = new Set(videos.map((video) => video.id));
+    return source.map((profile, index) => {
+        const normalized = profile && typeof profile === "object" ? profile : {};
+        let id = typeof normalized.id === "string" ? normalized.id.trim() : "";
+        if (!id || seenIds.has(id)) {
+            id = createRuntimeId("profile");
+        }
+        seenIds.add(id);
+        const name = String(normalized.name ?? "").trim() || `Profile ${index + 1}`;
+        const profileVideos = Array.isArray(normalized.videos)
+            ? normalized.videos.filter((videoId, position, list) => typeof videoId === "string" && validVideoIds.has(videoId) && !videoId.startsWith("_") && list.indexOf(videoId) === position)
+            : [];
+        return {id, name, videos: profileVideos};
+    });
+}
+
+function getVideoProfiles() {
+    const profiles = normalizeVideoProfilesData(electron.store.get("videoProfiles") ?? []);
+    electron.store.set("videoProfiles", profiles);
+    const defaultId = electron.store.get("videoProfileDefaultId") ?? "";
+    if (defaultId && !profiles.some((profile) => profile.id === defaultId)) {
+        electron.store.set("videoProfileDefaultId", "");
+    }
+    return profiles;
+}
+
+function saveVideoProfiles(profiles) {
+    electron.store.set("videoProfiles", normalizeVideoProfilesData(profiles));
+}
+
+function getSelectedProfileId() {
+    return $("#videoProfiles").val();
+}
+
+function getSelectedProfile() {
+    const selectedId = getSelectedProfileId();
+    return getVideoProfiles().find((profile) => profile.id === selectedId) ?? null;
+}
+
+function renderProfileOptions() {
+    const profiles = getVideoProfiles();
+    const defaultId = electron.store.get("videoProfileDefaultId") ?? "";
+    const currentSelection = getSelectedProfileId();
+    const select = document.getElementById("videoProfiles");
+    if (!select) {
+        return;
+    }
+    const options = profiles.map((profile) => {
+        const suffixParts = [`${profile.videos.length} videos`];
+        if (profile.id === defaultId) {
+            suffixParts.push("default");
+        }
+        return `<option value="${profile.id}">${escapeHtml(profile.name)} (${suffixParts.join(", ")})</option>`;
+    });
+    select.innerHTML = options.length > 0 ? options.join("") : `<option value="">No saved profiles</option>`;
+    if (profiles.some((profile) => profile.id === pendingProfileSelectionId)) {
+        select.value = pendingProfileSelectionId;
+    } else if (profiles.some((profile) => profile.id === currentSelection)) {
+        select.value = currentSelection;
+    } else if (profiles[0]) {
+        select.value = profiles[0].id;
+    }
+    pendingProfileSelectionId = "";
+    renderSelectedProfileSummary();
+}
+
+function renderSelectedProfileSummary() {
+    const summary = document.getElementById("videoProfileSummary");
+    if (!summary) {
+        return;
+    }
+    const profile = getSelectedProfile();
+    if (!profile) {
+        summary.innerHTML = `<p class="w3-small">Create a profile to save and reuse checked videos.</p>`;
+        return;
+    }
+    const isDefault = profile.id === (electron.store.get("videoProfileDefaultId") ?? "");
+    summary.innerHTML = `<div class="infoGrid compactInfoGrid">
+            <div><span class="infoLabel">Profile</span><span class="infoValue">${escapeHtml(profile.name)}</span></div>
+            <div><span class="infoLabel">Videos</span><span class="infoValue">${profile.videos.length}</span></div>
+            <div><span class="infoLabel">Default</span><span class="infoValue">${isDefault ? "Yes" : "No"}</span></div>
+            <div><span class="infoLabel">Launch behavior</span><span class="infoValue">${electron.store.get("videoProfileAutoApplyOnLaunch") ? "Auto-apply default" : "Manual only"}</span></div>
+        </div>`;
+}
+
+function openVideoProfileDialog(mode) {
+    const dialog = document.getElementById("videoProfileDialog");
+    const input = document.getElementById("videoProfileNameInput");
+    const modeInput = document.getElementById("videoProfileDialogMode");
+    const sourceInput = document.getElementById("videoProfileDialogSourceId");
+    const title = document.getElementById("videoProfileDialogTitle");
+    const button = document.getElementById("videoProfileDialogSubmit");
+    const selectedProfile = getSelectedProfile();
+    modeInput.value = mode;
+    sourceInput.value = selectedProfile?.id ?? "";
+    switch (mode) {
+        case "rename":
+            if (!selectedProfile) {
+                alert("Select a profile to rename.");
+                return;
+            }
+            title.textContent = "Rename Profile";
+            button.textContent = "Rename";
+            input.value = selectedProfile.name;
+            break;
+        case "duplicate":
+            if (!selectedProfile) {
+                alert("Select a profile to duplicate.");
+                return;
+            }
+            title.textContent = "Duplicate Profile";
+            button.textContent = "Duplicate";
+            input.value = `${selectedProfile.name} Copy`;
+            break;
+        default:
+            title.textContent = "Create Profile";
+            button.textContent = "Create";
+            input.value = "";
+            break;
+    }
+    dialog.style.display = "block";
+    input.focus();
+    input.select();
+}
+
+function closeVideoProfileDialog() {
+    document.getElementById("videoProfileDialog").style.display = "none";
+}
+
+function submitVideoProfileDialog() {
+    const mode = document.getElementById("videoProfileDialogMode").value;
+    const sourceId = document.getElementById("videoProfileDialogSourceId").value;
+    const name = document.getElementById("videoProfileNameInput").value.trim();
+    if (!name) {
+        alert("Profile name is required.");
+        return;
+    }
+    const profiles = getVideoProfiles();
+    const conflictingProfile = profiles.find((profile) => profile.name.toLowerCase() === name.toLowerCase() && profile.id !== sourceId);
+    if (conflictingProfile) {
+        alert("A profile with that name already exists.");
+        return;
+    }
+    if (mode === "rename") {
+        const profile = profiles.find((entry) => entry.id === sourceId);
+        if (!profile) {
+            alert("Select a profile to rename.");
+            return;
+        }
+        profile.name = name;
+        saveVideoProfiles(profiles);
+        pendingProfileSelectionId = profile.id;
+    } else if (mode === "duplicate") {
+        const sourceProfile = profiles.find((entry) => entry.id === sourceId);
+        if (!sourceProfile) {
+            alert("Select a profile to duplicate.");
+            return;
+        }
+        const duplicate = {
+            id: createRuntimeId("profile"),
+            name,
+            videos: [...sourceProfile.videos]
+        };
+        profiles.push(duplicate);
+        saveVideoProfiles(profiles);
+        pendingProfileSelectionId = duplicate.id;
+    } else {
+        const created = {
+            id: createRuntimeId("profile"),
+            name,
+            videos: allowedVideos.filter((videoId) => !videoId.startsWith("_"))
+        };
+        profiles.push(created);
+        saveVideoProfiles(profiles);
+        pendingProfileSelectionId = created.id;
+    }
+    closeVideoProfileDialog();
+    renderVideoSettingsPanel();
+    refreshCache();
+}
+
+function applySelectedProfile() {
+    const profile = getSelectedProfile();
+    if (!profile) {
+        alert("Select a profile to load.");
+        return;
+    }
+    const customAllowed = allowedVideos.filter((videoId) => videoId.startsWith("_"));
+    allowedVideos = Array.from(new Set([...profile.videos, ...customAllowed]));
+    electron.store.set("allowedVideos", allowedVideos);
+    makeList();
+    renderVideoSettingsPanel();
+    refreshCache();
+}
+
+function saveCurrentSelectionToSelectedProfile() {
+    const profile = getSelectedProfile();
+    if (!profile) {
+        alert("Select a profile to update.");
+        return;
+    }
+    const profiles = getVideoProfiles();
+    const target = profiles.find((entry) => entry.id === profile.id);
+    target.videos = allowedVideos.filter((videoId) => !videoId.startsWith("_"));
+    saveVideoProfiles(profiles);
+    renderVideoSettingsPanel();
+    refreshCache();
+}
+
+function deleteSelectedProfile() {
+    const profile = getSelectedProfile();
+    if (!profile) {
+        alert("Select a profile to delete.");
+        return;
+    }
+    if (!confirm(`Delete profile "${profile.name}"?`)) {
+        return;
+    }
+    const profiles = getVideoProfiles().filter((entry) => entry.id !== profile.id);
+    saveVideoProfiles(profiles);
+    if ((electron.store.get("videoProfileDefaultId") ?? "") === profile.id) {
+        electron.store.set("videoProfileDefaultId", "");
+    }
+    renderVideoSettingsPanel();
+    refreshCache();
+}
+
+function duplicateSelectedProfile() {
+    openVideoProfileDialog("duplicate");
+}
+
+function renameSelectedProfile() {
+    openVideoProfileDialog("rename");
+}
+
+function setSelectedProfileAsDefault() {
+    const profile = getSelectedProfile();
+    if (!profile) {
+        alert("Select a profile to mark as default.");
+        return;
+    }
+    electron.store.set("videoProfileDefaultId", profile.id);
+    renderVideoSettingsPanel();
+}
+
+function toggleVideoProfileAutoApply() {
+    const input = document.getElementById("videoProfileAutoApplyOnLaunch");
+    electron.store.set("videoProfileAutoApplyOnLaunch", !!input?.checked);
+    renderSelectedProfileSummary();
+}
+
+function applyFavoriteSelection(mode) {
+    const favoriteIds = videos
+        .filter((video) => getFavoriteVideoIdSet().has(video.id))
+        .map((video) => video.id);
+    if (favoriteIds.length === 0) {
+        alert("No favorite videos are available.");
+        return;
+    }
+    if (mode === "only") {
+        const customAllowed = allowedVideos.filter((videoId) => videoId.startsWith("_"));
+        allowedVideos = Array.from(new Set([...favoriteIds, ...customAllowed]));
+    } else if (mode === "select") {
+        allowedVideos = Array.from(new Set([...allowedVideos, ...favoriteIds]));
+    } else {
+        allowedVideos = allowedVideos.filter((videoId) => videoId.startsWith("_") || !favoriteIds.includes(videoId));
+    }
+    electron.store.set("allowedVideos", allowedVideos);
+    makeList();
+    renderVideoSettingsPanel();
+    refreshCache();
+}
+
+function renderVideoSettingsPanel() {
+    const favoriteCount = favoriteVideos.length;
+    $('#videoSettings').html(`<div class="w3-container videoSettingsContent">
+            <div class="settingActionRow videoSettingsButtonRow">
+                <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectAll()">Select All</button>
+                <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectAll()">Deselect All</button>
+            </div>
+            <div class="videoSettingsSelectRow videoSettingsControlRow">
+                <select class="w3-select w3-border" style="width: 25%" id="videoType">
+                    <option value="cityscape">Cityscape</option>
+                    <option value="landscape">Landscape</option>
+                    <option value="space">Space</option>
+                    <option value="underwater">Underwater</option>
+                </select>
+                <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectType()">Select Type</button>
+                <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectType()">Deselect Type</button>
+            </div>
+            <div class="videoSettingsSection">
+                <div class="settingSplitRow videoSettingsSectionHeader">
+                    <h3>Favorites</h3>
+                    <span class="w3-small">${favoriteCount} pinned video${favoriteCount === 1 ? "" : "s"}</span>
+                </div>
+                <div class="videoSettingsSectionBody">
+                    <div class="infoPanel">
+                        <div class="infoGrid compactInfoGrid">
+                            <div><span class="infoLabel">Pinned at top</span><span class="infoValue">${favoriteCount}</span></div>
+                            <div><span class="infoLabel">Quick filter</span><span class="infoValue">Use the Favorites chip in the video sidebar.</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="settingActionRow videoSettingsButtonRow">
+                    <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="applyFavoriteSelection('select')">Select Favorites</button>
+                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="applyFavoriteSelection('only')">Only Favorites</button>
+                    <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="applyFavoriteSelection('clear')">Clear Favorites</button>
+                </div>
+            </div>
+            <div class="videoSettingsSection">
+                <div class="settingSplitRow videoSettingsSectionHeader">
+                    <h3>Profiles</h3>
+                    <span class="w3-small">Save reusable video selections</span>
+                </div>
+                <div class="videoSettingsSectionBody">
+                    <select class="w3-select w3-border" id="videoProfiles" onchange="renderSelectedProfileSummary()"></select>
+                    <div id="videoProfileSummary" class="infoPanel"></div>
+                    <label class="videoSettingsToggleRow" for="videoProfileAutoApplyOnLaunch">
+                        <input type="checkbox" id="videoProfileAutoApplyOnLaunch" class="w3-check" onclick="toggleVideoProfileAutoApply()">
+                        <span>Auto-apply the default profile on launch</span>
+                    </label>
+                </div>
+                <div class="settingActionRow videoSettingsButtonRow">
+                    <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="applySelectedProfile()">Load Profile</button>
+                    <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="saveCurrentSelectionToSelectedProfile()">Update Profile</button>
+                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="openVideoProfileDialog('create')">Create</button>
+                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="duplicateSelectedProfile()">Duplicate</button>
+                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="renameSelectedProfile()">Rename</button>
+                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="setSelectedProfileAsDefault()">Set Default</button>
+                    <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deleteSelectedProfile()">Delete</button>
+                </div>
+            </div>
+            <div class="videoSettingsSection">
+                <h3>Downloads</h3>
+                <div class="videoSettingsSelectRow videoSettingsControlRow">
+                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="changeAllVideoDownloadState('allVideoDownloadState')">Set all videos to</button>
+                    <select id="allVideoDownloadState" class="w3-select w3-border" style="width: 35%">
+                        <option value="whenChecked">download when checked</option>
+                        <option value="always">always download</option>
+                        <option value="never">never download</option>
+                    </select>
+                </div>
+            </div>
+        </div>`).css('display', '');
+    renderProfileOptions();
+    $("#videoProfileAutoApplyOnLaunch").prop("checked", !!electron.store.get("videoProfileAutoApplyOnLaunch"));
+}
+
+function setVideoSearch(value) {
+    videoSearchQuery = value;
+    makeList();
+}
+
+function toggleVideoQuickFilter(filterKey) {
+    videoQuickFilters[filterKey] = !videoQuickFilters[filterKey];
+    makeList();
+}
+
+function setVideoTypeQuickFilter(value) {
+    videoQuickFilters.type = value;
+    makeList();
+}
+
+function clearVideoFilters() {
+    videoSearchQuery = "";
+    videoQuickFilters = {
+        checkedOnly: false,
+        downloadedOnly: false,
+        favoritesOnly: false,
+        userAddedOnly: false,
+        type: "all"
+    };
+    makeList();
+}
+
+function getVisibleVideoIndices() {
+    const userAddedIds = getUserAddedVideoIdSet();
+    const query = videoSearchQuery.trim().toLowerCase();
+    return videos.reduce((matches, video, index) => {
+        const haystack = [video.name, video.id, video.accessibilityLabel, video.type].filter(Boolean).join(" ").toLowerCase();
+        if (query && !haystack.includes(query)) {
+            return matches;
+        }
+        if (videoQuickFilters.checkedOnly && !allowedVideos.includes(video.id)) {
+            return matches;
+        }
+        if (videoQuickFilters.downloadedOnly && !downloadedVideos.includes(video.id)) {
+            return matches;
+        }
+        if (videoQuickFilters.favoritesOnly && !favoriteVideos.includes(video.id)) {
+            return matches;
+        }
+        if (videoQuickFilters.userAddedOnly && !userAddedIds.has(video.id)) {
+            return matches;
+        }
+        if (videoQuickFilters.type !== "all" && video.type !== videoQuickFilters.type) {
+            return matches;
+        }
+        matches.push(index);
+        return matches;
+    }, []);
+}
+
+function renderVideoListRow(index) {
+    const video = videos[index];
+    const favoriteSet = getFavoriteVideoIdSet();
+    return `<div class="videoListRow">
+                <input type="checkbox" ${allowedVideos.includes(video.id) ? "checked" : ""} class="w3-check videoListCheck" onclick="checkVideo(event,${index})">
+                <a href="#" id="videoList-${index}" onclick="selectVideo(${index}); return false;" class="videoListEntry">
+                    <span class="videoListEntryName">${escapeHtml(video.name ? video.name : video.accessibilityLabel)}</span>
+                    <span class="videoListEntryMeta">
+                        ${favoriteSet.has(video.id) ? "<span class='videoListBadge videoListBadgeFavorite'>Favorite</span>" : ""}
+                        ${downloadedVideos.includes(video.id) ? "<span class='videoListBadge'>Cached</span>" : ""}
+                        ${getUserAddedVideoIdSet().has(video.id) ? "<span class='videoListBadge videoListBadgeMuted'>User added</span>" : ""}
+                    </span>
+                </a>
+            </div>`;
+}
+
+function setVideoGroupSelection(groupLabel, mode) {
+    const matchingIds = videos
+        .filter((video) => video.accessibilityLabel === groupLabel)
+        .map((video) => video.id);
+    if (mode === "only") {
+        const customAllowed = allowedVideos.filter((videoId) => videoId.startsWith("_"));
+        allowedVideos = Array.from(new Set([...matchingIds, ...customAllowed]));
+    } else if (mode === "select") {
+        for (const videoId of matchingIds) {
+            if (!allowedVideos.includes(videoId)) {
+                allowedVideos.push(videoId);
+            }
+        }
+    } else {
+        allowedVideos = allowedVideos.filter((videoId) => videoId.startsWith("_") || !matchingIds.includes(videoId));
+    }
+    electron.store.set("allowedVideos", allowedVideos);
+    makeList();
+    renderVideoSettingsPanel();
+    refreshCache();
+}
+
 //Makes and then displays the videos on the sidebar
 function makeList() {
-    let videoList = "<div class='videoListTitleLink'><h3 class=\"w3-bar-item videoListTitle sidebarHeader\"><i class=\"fa fa-film\"></i> Videos</h3></div>";
-    let headertxt = "";
-    for (let i = 0; i < videos.length; i++) {
-        if (headertxt !== videos[i].accessibilityLabel) {
-            videoList += `<h5 class="w3-bar-item videoListSectionTitle">${videos[i].accessibilityLabel}</h5>`;
-            headertxt = videos[i].accessibilityLabel;
+    const previousSearchInput = document.getElementById("videoSidebarSearch");
+    const shouldRestoreSearchFocus = document.activeElement === previousSearchInput;
+    const previousSelectionStart = shouldRestoreSearchFocus ? previousSearchInput.selectionStart : null;
+    const previousSelectionEnd = shouldRestoreSearchFocus ? previousSearchInput.selectionEnd : null;
+    const visibleIndices = getVisibleVideoIndices();
+    const favoriteSet = getFavoriteVideoIdSet();
+    const pinnedFavoriteIndices = visibleIndices.filter((index) => favoriteSet.has(videos[index].id));
+    const regularIndices = visibleIndices.filter((index) => !favoriteSet.has(videos[index].id));
+    const types = Array.from(new Set(videos.map((video) => video.type).filter(Boolean)));
+    let videoList = `<div class='videoListTitleLink sidebarHeader'>
+            <div class="videoSidebarHeader">
+                <h3 class="w3-bar-item videoListTitle"><i class="fa fa-film"></i> Videos</h3>
+                <div class="videoSidebarControls">
+                    <input id="videoSidebarSearch" class="w3-input videoSidebarSearch" type="text" placeholder="Search videos" value="${escapeHtml(videoSearchQuery)}" oninput="setVideoSearch(this.value)">
+                    <div class="videoQuickFilterRow">
+                        <button class="videoQuickFilter ${videoQuickFilters.checkedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('checkedOnly')">Checked</button>
+                        <button class="videoQuickFilter ${videoQuickFilters.downloadedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('downloadedOnly')">Downloaded</button>
+                        <button class="videoQuickFilter ${videoQuickFilters.favoritesOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('favoritesOnly')">Favorites</button>
+                        <button class="videoQuickFilter ${videoQuickFilters.userAddedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('userAddedOnly')">User Added</button>
+                    </div>
+                    <div class="videoQuickFilterFooter">
+                        <select class="w3-select videoTypeQuickFilter" onchange="setVideoTypeQuickFilter(this.value)">
+                            <option value="all">All types</option>
+                            ${types.map((type) => `<option value="${type}" ${videoQuickFilters.type === type ? "selected" : ""}>${escapeHtml(type.charAt(0).toUpperCase() + type.slice(1))}</option>`).join("")}
+                        </select>
+                <button class="w3-button w3-white w3-border w3-round-large" onclick="clearVideoFilters()">Clear</button>
+                    </div>
+                    <p class="w3-small videoSidebarMeta">Showing ${visibleIndices.length} of ${videos.length} videos</p>
+                </div>
+            </div>
+        </div>`;
+    if (pinnedFavoriteIndices.length > 0) {
+        videoList += `<div class="videoListSectionHeader">
+                    <h5 class="videoListSectionTitle">Favorites</h5>
+                    <div class="videoListSectionActions" role="group" aria-label="Selection actions for favorites">
+                        <button class="videoSectionAction" onclick="applyFavoriteSelection('select')">All</button>
+                        <button class="videoSectionAction" onclick="applyFavoriteSelection('only')">Only</button>
+                        <button class="videoSectionAction" onclick="applyFavoriteSelection('clear')">None</button>
+                    </div>
+                </div>`;
+        for (const index of pinnedFavoriteIndices) {
+            videoList += renderVideoListRow(index);
         }
-        videoList += `<div class="videoListRow">
-                        <input type="checkbox" ${allowedVideos.includes(videos[i].id) ? "checked" : ""} class="w3-check videoListCheck" onclick="checkVideo(event,${i})">
-                        <a href="#" id="videoList-${i}" onclick="selectVideo(${i}); return false;" class="videoListEntry">
-                        ${videos[i].name ? videos[i].name : videos[i].accessibilityLabel}
-                        </a>
-                      </div>`;
+    }
+    let headertxt = "";
+    for (const index of regularIndices) {
+        const video = videos[index];
+        const safeLabel = String(video.accessibilityLabel ?? "").replace(/'/g, "\\'");
+        if (headertxt !== video.accessibilityLabel) {
+            videoList += `<div class="videoListSectionHeader">
+                    <h5 class="videoListSectionTitle" title="${escapeHtml(video.accessibilityLabel)}">${escapeHtml(video.accessibilityLabel)}</h5>
+                    <div class="videoListSectionActions" role="group" aria-label="Selection actions for ${escapeHtml(video.accessibilityLabel)}">
+                        <button class="videoSectionAction" onclick="setVideoGroupSelection('${safeLabel}','select')">All</button>
+                        <button class="videoSectionAction" onclick="setVideoGroupSelection('${safeLabel}','only')">Only</button>
+                        <button class="videoSectionAction" onclick="setVideoGroupSelection('${safeLabel}','clear')">None</button>
+                    </div>
+                </div>`;
+            headertxt = video.accessibilityLabel;
+        }
+        videoList += renderVideoListRow(index);
+    }
+    if (visibleIndices.length === 0) {
+        videoList += `<div class="videoListEmptyState">
+                <p>No videos match the current filters.</p>
+                <button class="w3-button w3-white w3-border w3-round-large" onclick="clearVideoFilters()">Clear filters</button>
+            </div>`;
     }
     $('#videoList').html(videoList);
+    if (shouldRestoreSearchFocus) {
+        const nextSearchInput = document.getElementById("videoSidebarSearch");
+        if (nextSearchInput) {
+            nextSearchInput.focus();
+            if (typeof previousSelectionStart === "number" && typeof previousSelectionEnd === "number") {
+                nextSearchInput.setSelectionRange(previousSelectionStart, previousSelectionEnd);
+            }
+        }
+    }
 }
 
 $(document).ready(() => {
@@ -1020,14 +1847,20 @@ $(document).ready(() => {
 
 //Shows further info when you click on a video
 function selectVideo(index) {
+    selectedVideoIndex = index;
     let x = document.getElementsByClassName("videoListEntry");
     for (i = 0; i < x.length; i++) {
         x[i].className = x[i].className.replace(" videoListEntryActive", "");
     }
     if (index > -1) {
         downloadedVideos = electron.store.get("downloadedVideos") ?? [];
-        document.getElementById("videoList-" + index).className += " videoListEntryActive";
+        favoriteVideos = electron.store.get("favoriteVideos") ?? [];
+        const selectedEntry = document.getElementById("videoList-" + index);
+        if (selectedEntry) {
+            selectedEntry.className += " videoListEntryActive";
+        }
         const hasDownloadedCopy = downloadedVideos.includes(videos[index].id);
+        const isFavorite = favoriteVideos.includes(videos[index].id);
         let videoSRC = getVideoSource(videos[index]);
         if (hasDownloadedCopy) {
             videoSRC = `${electron.store.get('cachePath')}/${videos[index].id}.mov`;
@@ -1051,10 +1884,16 @@ function selectVideo(index) {
             videoDownloadState = "never";
         }
         $('#videoInfo').html(`<div class="videoInfoContent">
-                              <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="selectVideo(-1)">
-                                <i class="fa fa-arrow-left"></i> Back to Video Settings
-                              </button>
+                              <div class="settingActionRow videoInfoTopActions">
+                                  <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="selectVideo(-1)">
+                                    <i class="fa fa-arrow-left"></i> Back to Video Settings
+                                  </button>
+                                  <button class="w3-button w3-white w3-border ${isFavorite ? "w3-border-yellow" : "w3-border-blue"} w3-round-large" onclick="toggleFavoriteVideo('${videos[index].id}')">
+                                    <i class="fa ${isFavorite ? "fa-star" : "fa-star-o"}"></i> ${isFavorite ? "Unfavorite" : "Favorite"}
+                                  </button>
+                              </div>
                               ${hasVideoSource ? "" : "<p class='w3-small'>Preview is unavailable for this video source.</p>"}
+                              ${isFavorite ? "<p class='w3-large'><i class='fa fa-star' style='color: #d4a017'></i> Favorite</p>" : ""}
                               ${hasDownloadedCopy ? "<p class='w3-large'><i class='far fa-check-circle' style='color: #4CAF50'></i> Downloaded</p>" : "<p class='w3-large'><i class='far fa-times-circle' style='color: #f44336'></i> Downloaded</p>"}
                               <div class="w3-small videoInfoDownloadOptions">
                                   <label class="videoInfoDownloadOption">
@@ -1079,46 +1918,7 @@ function selectVideo(index) {
         $('#videoPlayer').hide();
         $('#videoName').text("Video Settings");
         $('#videoInfo').css('display', 'none');
-        $('#videoSettings').html(`<div class="w3-container videoSettingsContent">
-                                  <div class="settingActionRow">
-                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectAll()">Select All</button>
-                                      <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectAll()">Deselect All</button>
-                                  </div>
-                                  <div class="videoSettingsSelectRow">
-                                      <select class="w3-select w3-border" style="width: 25%" id="videoType">
-                                         <option value="cityscape">Cityscape</option>
-                                         <option value="landscape">Landscape</option>
-                                         <option value="space">Space</option>
-                                         <option value="underwater">Underwater</option>
-                                      </select>
-                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="selectType()">Select Type</button>
-                                      <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="deselectType()">Deselect Type</button>
-                                  </div>
-                                  <h3>Profiles</h3>
-                                  <select class="w3-select w3-border" id="videoProfiles">
-                                  </select>
-                                  <div class="settingActionRow">
-                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="displayProfile('videoProfiles')">Load Profile</button>
-                                      <button class="w3-button w3-white w3-border w3-border-green w3-round-large" onclick="updateProfile('videoProfiles')">Update Profile</button>
-                                      <button class="w3-button w3-white w3-border w3-border-red w3-round-large" onclick="removeProfile('videoProfiles')">Delete Profile</button>
-                                      <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="document.getElementById('createVideoProfile').style.display='block'">Create Profile</button>
-                                  </div>
-                                  <h3>Downloads</h3>
-                                  <div class="videoSettingsSelectRow">
-                                      <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" onclick="changeAllVideoDownloadState('allVideoDownloadState')">Set all videos to</button>
-                                      <select id="allVideoDownloadState" class="w3-select w3-border" style="width: 35%">
-                                        <option value="whenChecked">download when checked</option>
-                                        <option value="always">always download</option>
-                                        <option value="never">never download</option>
-                                      </select>
-                                  </div>
-                                  </div>`).css('display', '');
-        let profiles = electron.store.get('videoProfiles');
-        let html = "";
-        for (let i = 0; i < profiles.length; i++) {
-            html += `<option value="${profiles[i].name}">${profiles[i].name}</option>`
-        }
-        $('#videoProfiles').html(html);
+        renderVideoSettingsPanel();
     }
 }
 
@@ -1141,6 +1941,7 @@ function changeVideoDownloadState(element, videoId) {
     }
     electron.store.set("alwaysDownloadVideos", alwaysDownloadVideos);
     electron.store.set("neverDownloadVideos", neverDownloadVideos);
+    refreshCache();
 }
 
 function changeAllVideoDownloadState(elementId) {
@@ -1162,6 +1963,8 @@ function changeAllVideoDownloadState(elementId) {
     }
     electron.store.set("alwaysDownloadVideos", alwaysDownloadVideos);
     electron.store.set("neverDownloadVideos", neverDownloadVideos);
+    renderVideoSettingsPanel();
+    refreshCache();
 }
 
 //Updates the video list when a video is checked
@@ -1172,6 +1975,9 @@ function checkVideo(e, index) {
         allowedVideos.splice(allowedVideos.indexOf(videos[index].id), 1);
     }
     electron.store.set("allowedVideos", allowedVideos);
+    if (selectedVideoIndex === -1) {
+        renderVideoSettingsPanel();
+    }
     setTimeout(refreshCache, 50);
 }
 
@@ -1180,6 +1986,7 @@ function deselectAll() {
     allowedVideos = allowedVideos.filter(id => id[0] === "_");
     electron.store.set("allowedVideos", allowedVideos);
     makeList();
+    renderVideoSettingsPanel();
 }
 
 function selectAll() {
@@ -1189,6 +1996,7 @@ function selectAll() {
     }
     electron.store.set("allowedVideos", allowedVideos);
     makeList();
+    renderVideoSettingsPanel();
 }
 
 function selectType() {
@@ -1202,6 +2010,7 @@ function selectType() {
     }
     electron.store.set("allowedVideos", allowedVideos);
     makeList();
+    renderVideoSettingsPanel();
 }
 
 function deselectType() {
@@ -1215,54 +2024,28 @@ function deselectType() {
     }
     electron.store.set("allowedVideos", allowedVideos);
     makeList();
+    renderVideoSettingsPanel();
 }
 
 //Video Profiles
 function createProfile(id) {
-    let profiles = electron.store.get('videoProfiles');
-    profiles.push({
-        "name": $(`#${id}`).val(),
-        "videos": allowedVideos
-    });
-    electron.store.set('videoProfiles', profiles);
-    selectVideo(-1);
+    const input = document.getElementById(id);
+    document.getElementById("videoProfileNameInput").value = input?.value ?? "";
+    document.getElementById("videoProfileDialogMode").value = "create";
+    document.getElementById("videoProfileDialogSourceId").value = "";
+    submitVideoProfileDialog();
 }
 
 function updateProfile(id) {
-    let profiles = electron.store.get('videoProfiles');
-    for (let i = 0; i < profiles.length; i++) {
-        if (profiles[i].name === $(`#${id}`).val()) {
-            profiles[i].videos = allowedVideos.filter(id => id[0] !== "_");
-            break;
-        }
-    }
-    electron.store.set('videoProfiles', profiles);
+    saveCurrentSelectionToSelectedProfile();
 }
 
 function removeProfile(id) {
-    let profiles = electron.store.get('videoProfiles');
-    for (let i = 0; i < profiles.length; i++) {
-        if (profiles[i].name === $(`#${id}`).val()) {
-            profiles.splice(i, 1);
-            break;
-        }
-    }
-    electron.store.set('videoProfiles', profiles);
-    selectVideo(-1);
+    deleteSelectedProfile();
 }
 
 function displayProfile(id) {
-    let customAllowed = allowedVideos.filter(id => id[0] === "_");
-    let profiles = electron.store.get('videoProfiles');
-    for (let i = 0; i < profiles.length; i++) {
-        if (profiles[i].name === $(`#${id}`).val()) {
-            allowedVideos = profiles[i].videos;
-            makeList();
-            break;
-        }
-    }
-    allowedVideos.push(...customAllowed);
-    electron.store.set("allowedVideos", allowedVideos);
+    applySelectedProfile();
 }
 
 //For formatting time and dates. Used throughout the config menu
