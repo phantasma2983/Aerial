@@ -52,6 +52,7 @@ const SunCalc = require('suncalc');
 
 const UPSTREAM_REPO_URL = "https://github.com/OrangeJedi/Aerial";
 let store;
+let weatherDataRequest = null;
 
 async function initializeStore() {
     const {default: Store} = await import('electron-store');
@@ -94,6 +95,8 @@ const LIFECYCLE_LOG_FILE = "aerial-lifecycle.log";
 const DEBUG_LOG_FILE = "aerial-debug.log";
 const MAX_LIFECYCLE_LOG_BYTES = 50 * 1024 * 1024;
 const MAX_DEBUG_LOG_BYTES = 100 * 1024 * 1024;
+const WEATHER_API_BASE_URL = "https://api.open-meteo.com/v1/forecast";
+const WEATHER_CACHE_TTL_MS = 20 * 60 * 1000;
 const CONFIG_BACKUP_DIR_NAME = "config-backups";
 const CONFIG_FILE_FILTERS = [{name: "Aerial Config", extensions: ["json"]}];
 const EXPORTED_CONFIG_EXCLUDED_KEYS = new Set([
@@ -115,6 +118,7 @@ const EXPORTED_CONFIG_EXCLUDED_KEYS = new Set([
     "downloadedVideos",
     "videoCatalog",
     "astronomy",
+    "weatherData",
     "lastConfigBackupPath",
     "lastConfigBackupCreatedAt"
 ]);
@@ -150,6 +154,160 @@ function appendBoundedLogLine(fileName, line, maxBytes) {
         // best-effort diagnostics only
     }
     fs.appendFileSync(logPath, payload);
+}
+
+function getWeatherUnavailableSnapshot(message, latitude = null, longitude = null) {
+    return {
+        available: false,
+        stale: false,
+        error: message,
+        fetchedAt: "",
+        latitude,
+        longitude,
+        source: "open-meteo",
+        temperatureC: null,
+        temperatureF: null,
+        windSpeedKmh: null,
+        weatherCode: null,
+        isDay: true
+    };
+}
+
+function buildWeatherUrl(latitude, longitude) {
+    const params = new URLSearchParams({
+        latitude: String(latitude),
+        longitude: String(longitude),
+        current: "temperature_2m,weather_code,is_day,wind_speed_10m",
+        wind_speed_unit: "kmh",
+        timezone: "auto"
+    });
+    return `${WEATHER_API_BASE_URL}?${params.toString()}`;
+}
+
+function fetchJson(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+        const request = https.get(url, {
+            headers: {
+                "User-Agent": "Aerial",
+                ...headers
+            }
+        }, (response) => {
+            let body = "";
+            response.setEncoding("utf8");
+            response.on("data", (chunk) => {
+                body += chunk;
+            });
+            response.on("end", () => {
+                if (response.statusCode !== 200) {
+                    reject(new Error(`Request failed with status ${response.statusCode}.`));
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(body));
+                } catch (error) {
+                    reject(error);
+                }
+            });
+        });
+        request.on("error", reject);
+    });
+}
+
+function normalizeWeatherSnapshot(payload, latitude, longitude) {
+    const current = payload?.current;
+    if (!current) {
+        throw new Error("Weather response did not include current conditions.");
+    }
+    const temperatureC = Number(current.temperature_2m);
+    const weatherCode = Number(current.weather_code);
+    const isDay = Number(current.is_day) === 1;
+    const windSpeedKmh = Number(current.wind_speed_10m);
+    if (!Number.isFinite(temperatureC) || !Number.isFinite(weatherCode)) {
+        throw new Error("Weather response was missing temperature or weather code.");
+    }
+    return {
+        available: true,
+        stale: false,
+        error: "",
+        fetchedAt: new Date().toISOString(),
+        latitude,
+        longitude,
+        source: "open-meteo",
+        temperatureC: Number(temperatureC.toFixed(1)),
+        temperatureF: Number((((temperatureC * 9) / 5) + 32).toFixed(1)),
+        windSpeedKmh: Number.isFinite(windSpeedKmh) ? Number(windSpeedKmh.toFixed(1)) : null,
+        weatherCode,
+        isDay
+    };
+}
+
+function getStoredWeatherSnapshot() {
+    const snapshot = store.get("weatherData");
+    if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
+        return null;
+    }
+    return snapshot;
+}
+
+function shouldRefreshWeather(snapshot, latitude, longitude, force = false) {
+    if (force || !snapshot || !snapshot.fetchedAt) {
+        return true;
+    }
+    if (Number(snapshot.latitude) !== latitude || Number(snapshot.longitude) !== longitude) {
+        return true;
+    }
+    const fetchedAt = Date.parse(snapshot.fetchedAt);
+    if (!Number.isFinite(fetchedAt)) {
+        return true;
+    }
+    return (Date.now() - fetchedAt) >= WEATHER_CACHE_TTL_MS;
+}
+
+async function getWeatherData(force = false) {
+    const latitude = Number(store.get("latitude"));
+    const longitude = Number(store.get("longitude"));
+    const storedSnapshot = getStoredWeatherSnapshot();
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+        const unavailable = storedSnapshot?.available
+            ? {
+                ...storedSnapshot,
+                stale: true,
+                error: "Set latitude and longitude in Settings > Time & Location to enable weather."
+            }
+            : getWeatherUnavailableSnapshot("Set latitude and longitude in Settings > Time & Location to enable weather.");
+        store.set("weatherData", unavailable);
+        return unavailable;
+    }
+    if (!shouldRefreshWeather(storedSnapshot, latitude, longitude, force)) {
+        return storedSnapshot;
+    }
+    if (weatherDataRequest) {
+        return weatherDataRequest;
+    }
+    weatherDataRequest = (async () => {
+        try {
+            const payload = await fetchJson(buildWeatherUrl(latitude, longitude));
+            const snapshot = normalizeWeatherSnapshot(payload, latitude, longitude);
+            store.set("weatherData", snapshot);
+            return snapshot;
+        } catch (error) {
+            if (storedSnapshot?.available) {
+                const staleSnapshot = {
+                    ...storedSnapshot,
+                    stale: true,
+                    error: error?.message ?? String(error)
+                };
+                store.set("weatherData", staleSnapshot);
+                return staleSnapshot;
+            }
+            const unavailable = getWeatherUnavailableSnapshot(error?.message ?? String(error), latitude, longitude);
+            store.set("weatherData", unavailable);
+            return unavailable;
+        } finally {
+            weatherDataRequest = null;
+        }
+    })();
+    return weatherDataRequest;
 }
 
 function getLogFilePath(fileName) {
@@ -1302,6 +1460,7 @@ function startUp() {
     }
     applyDefaultVideoProfileOnLaunch();
     calculateAstronomy();
+    getWeatherData(false);
     checkForUpdate();
     setupGlobalShortcut();
     store.set('numDisplays', screen.getAllDisplays().length);
@@ -1448,6 +1607,7 @@ function setUpConfigFile() {
     store.set('latitude', store.get('latitude') ?? "");
     store.set('longitude', store.get('longitude') ?? "");
     store.set('astronomy', store.get('astronomy') ?? astronomy)
+    store.set('weatherData', getStoredWeatherSnapshot() ?? getWeatherUnavailableSnapshot(""));
     //multiscreen settings
     store.set('sameVideoOnScreens', store.get('sameVideoOnScreens') ?? false);
     store.set('onlyShowVideoOnPrimaryMonitor', store.get('onlyShowVideoOnPrimaryMonitor') ?? false);
@@ -1742,6 +1902,10 @@ ipcMain.handle('copyDiagnostics', () => {
     };
 });
 
+ipcMain.handle('getWeatherData', (_event, force = false) => {
+    return getWeatherData(Boolean(force));
+});
+
 ipcMain.on('selectCustomLocation', async (event, arg) => {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
     const result = await dialog.showOpenDialog(ownerWindow, {
@@ -1840,13 +2004,14 @@ ipcMain.on('resetConfig', (event) => {
     //app.quit();
 });
 
-ipcMain.on('updateLocation', (event) => {
+ipcMain.on('updateLocation', async (event) => {
     calculateAstronomy();
     if (astronomy.calculated) {
         store.set('sunrise', (astronomy.sunrise.getHours() < 10 ? '0' : "") + astronomy.sunrise.getHours() + ':' + (astronomy.sunrise.getMinutes() < 10 ? '0' : "") + astronomy.sunrise.getMinutes());
         store.set('sunset', (astronomy.sunset.getHours() < 10 ? '0' : "") + astronomy.sunset.getHours() + ':' + (astronomy.sunset.getMinutes() < 10 ? '0' : "") + astronomy.sunset.getMinutes());
-        event.reply('displaySettings');
     }
+    await getWeatherData(true);
+    event.reply('displaySettings');
 });
 
 ipcMain.handle('newVideoId', (event, payload) => {

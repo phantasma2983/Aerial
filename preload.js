@@ -27,7 +27,7 @@ contextBridge.exposeInMainWorld("electron", {
             }
         },
         invoke: (channel, args) => {
-            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics"];
+            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "getWeatherData", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics"];
             if (validChannels.includes(channel)) {
                 return ipcRenderer.invoke(channel, args);
             }

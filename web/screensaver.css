@@ -51,6 +51,34 @@ body {
     height: auto;
 }
 
+.weatherInline {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+    line-height: 1;
+}
+
+.weatherInlineStale {
+    opacity: 0.82;
+}
+
+.weatherInlineUnavailable {
+    opacity: 0.82;
+    font-size: 0.9em;
+}
+
+.weatherIcon {
+    width: 1em;
+    height: 1em;
+    flex: 0 0 auto;
+    filter: brightness(0) invert(1);
+}
+
+.weatherTemperature {
+    display: inline-block;
+    line-height: 1;
+}
+
 * {
     cursor: none;
 }

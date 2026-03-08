@@ -74,6 +74,104 @@ function getTextTransitionDurationMs(setting, fallbackMs) {
 const textFadeInDuration = getTextTransitionDurationMs("textFadeInDuration", 650);
 const textFadeOutDuration = getTextTransitionDurationMs("textFadeOutDuration", 260);
 const globalDefaultTextOpacity = normalizeOpacity(electron.store.get("textOpacity"), 1);
+const WEATHER_RENDER_CHECK_MS = 5 * 60 * 1000;
+const WEATHER_ICON_BASE_PATH = "../assets/weather-icons/lucide";
+let weatherDisplayTimeout = null;
+let weatherDisplayRequest = null;
+let latestWeatherData = electron.store.get("weatherData") ?? null;
+
+function normalizeWeatherUnit(unit) {
+    return unit === "f" ? "f" : "c";
+}
+
+function getWeatherIconName(snapshot) {
+    const weatherCode = Number(snapshot?.weatherCode);
+    const windSpeedKmh = Number(snapshot?.windSpeedKmh);
+    if ([95, 96, 99].includes(weatherCode)) {
+        return "cloud-lightning.svg";
+    }
+    if ([56, 57, 66, 67, 71, 73, 75, 77, 85, 86].includes(weatherCode)) {
+        return "cloud-snow.svg";
+    }
+    if ([45, 48].includes(weatherCode)) {
+        return "cloud-fog.svg";
+    }
+    if ([51, 53, 55, 61, 63, 65, 80, 81, 82].includes(weatherCode)) {
+        return "cloud-rain.svg";
+    }
+    if (Number.isFinite(windSpeedKmh) && windSpeedKmh >= 35) {
+        return "wind.svg";
+    }
+    if (weatherCode === 0) {
+        return snapshot?.isDay ? "sun.svg" : "moon.svg";
+    }
+    if ([1, 2].includes(weatherCode)) {
+        return snapshot?.isDay ? "cloud-sun.svg" : "cloud.svg";
+    }
+    return "cloud.svg";
+}
+
+function formatWeatherTemperature(snapshot, unit) {
+    const normalizedUnit = normalizeWeatherUnit(unit);
+    const temperature = normalizedUnit === "f" ? Number(snapshot?.temperatureF) : Number(snapshot?.temperatureC);
+    if (!Number.isFinite(temperature)) {
+        return "--";
+    }
+    return `${Math.round(temperature)}°${normalizedUnit.toUpperCase()}`;
+}
+
+function buildWeatherMarkup(snapshot, unit) {
+    if (!snapshot?.available && !snapshot?.stale) {
+        return `<span class="weatherInline weatherInlineUnavailable">Weather unavailable</span>`;
+    }
+    const iconName = getWeatherIconName(snapshot);
+    return `<span class="weatherInline${snapshot?.stale ? " weatherInlineStale" : ""}">
+            <img class="weatherIcon" src="${WEATHER_ICON_BASE_PATH}/${iconName}" alt="" aria-hidden="true">
+            <span class="weatherTemperature">${formatWeatherTemperature(snapshot, unit)}</span>
+        </span>`;
+}
+
+function renderWeatherHosts() {
+    document.querySelectorAll(".weatherOverlayHost").forEach((element) => {
+        element.innerHTML = buildWeatherMarkup(latestWeatherData, element.dataset.weatherUnit);
+    });
+}
+
+function scheduleWeatherDisplayRefresh() {
+    if (weatherDisplayTimeout) {
+        clearTimeout(weatherDisplayTimeout);
+    }
+    if (!document.querySelector(".weatherOverlayHost")) {
+        return;
+    }
+    weatherDisplayTimeout = setTimeout(() => {
+        refreshWeatherDisplay(false);
+    }, WEATHER_RENDER_CHECK_MS);
+}
+
+function refreshWeatherDisplay(force = false) {
+    if (!document.querySelector(".weatherOverlayHost")) {
+        return Promise.resolve(latestWeatherData);
+    }
+    if (weatherDisplayRequest) {
+        return weatherDisplayRequest;
+    }
+    weatherDisplayRequest = electron.ipcRenderer.invoke("getWeatherData", force)
+        .then((snapshot) => {
+            latestWeatherData = snapshot;
+            renderWeatherHosts();
+            return snapshot;
+        })
+        .catch(() => {
+            renderWeatherHosts();
+            return latestWeatherData;
+        })
+        .finally(() => {
+            weatherDisplayRequest = null;
+            scheduleWeatherDisplayRefresh();
+        });
+    return weatherDisplayRequest;
+}
 
 function logPlayback(message, details) {
     if (!debugPlayback) {
@@ -1116,6 +1214,8 @@ function displayTextPosition(position, displayLocation) {
                 .css('font-weight', `${lineFontWeight}`);
         }
     }
+    renderWeatherHosts();
+    refreshWeatherDisplay(false);
 }
 
 function createContentLine(contentLine, position, line) {
@@ -1174,6 +1274,9 @@ function createContentLine(contentLine, position, line) {
             break;
         case "information":
             html += "<script>drawDynamicText()</script>";
+            break;
+        case "weather":
+            html += `<span id="${position}-${line}-weather" class="weatherOverlayHost" data-weather-unit="${normalizeWeatherUnit(contentLine.weatherUnit)}"></span>`;
             break;
     }
     return html;

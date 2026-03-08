@@ -1161,6 +1161,31 @@ function updatePositionType(position, line) {
             );
             formRows += formRow("Format Help", helpButtonHtml);
             break;
+        case "weather":
+            activeLine.weatherUnit = activeLine.weatherUnit === "f" ? "f" : "c";
+            formRows += formRow(
+                "Temperature Unit",
+                `<select id="positionWeatherUnit" class="positionInputTiny" onchange="updateTextSetting(this, '${position}','${line}', 'weatherUnit')">
+                                <option value="c" ${activeLine.weatherUnit === "c" ? "selected" : ""}>Celsius</option>
+                                <option value="f" ${activeLine.weatherUnit === "f" ? "selected" : ""}>Fahrenheit</option>
+                            </select>`,
+                "positionWeatherUnit"
+            );
+            formRows += formRow(
+                "Source",
+                `<span class="positionPreviewValue">Open-Meteo current conditions using the configured latitude and longitude.</span>`
+            );
+            formRows += formRow(
+                "Refresh",
+                `<span class="positionPreviewValue">Cached locally and refreshed automatically every 20 minutes.</span>`
+            );
+            if (document.getElementById('latitude').value === "" || document.getElementById('longitude').value === "") {
+                formRows += formRow(
+                    "Location Needed",
+                    `<span class="positionPreviewValue">Set latitude and longitude in Settings > Time & Location to show weather.</span>`
+                );
+            }
+            break;
     }
     if (activeLine.type !== "none") {
         formRows += formDivider();
