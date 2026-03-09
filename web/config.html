@@ -19,9 +19,22 @@
 <div class="w3-top appTopBar">
     <div class="topHeader">
         <h1 class="appTitle">Aerial Config</h1>
-        <button id="themeToggle" class="w3-button themeToggle" onclick="toggleTheme()">
-            <i class="fa fa-moon"></i> Dark
-        </button>
+        <div class="windowActions">
+            <button id="themeToggle" class="w3-button themeToggle" onclick="toggleTheme()">
+                <i class="fa fa-moon"></i> Dark
+            </button>
+            <div class="windowControls" role="group" aria-label="Window controls">
+                <button id="windowMinimize" class="w3-button windowControlButton" type="button" onclick="minimizeConfigWindow()" aria-label="Minimize window" title="Minimize">
+                    <span aria-hidden="true">&minus;</span>
+                </button>
+                <button id="windowMaximize" class="w3-button windowControlButton" type="button" onclick="toggleConfigWindowMaximize()" aria-label="Maximize window" title="Maximize">
+                    <span id="windowMaximizeIcon" aria-hidden="true">&#9633;</span>
+                </button>
+                <button id="windowClose" class="w3-button windowControlButton windowControlClose" type="button" onclick="closeConfigWindow()" aria-label="Close window" title="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+            </div>
+        </div>
     </div>
     <div class="w3-bar appTabBar">
         <button class="w3-bar-item w3-button tablink w3-blue" onclick="changeTab(event,'settingsTab')">Settings</button>

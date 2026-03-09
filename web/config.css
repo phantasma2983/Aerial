@@ -27,9 +27,9 @@
     --row-alt: #1b2a42;
     --radio-highlight: #7de1d6;
     --shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
-    --radius-sm: 8px;
-    --radius-md: 12px;
-    --radius-lg: 16px;
+    --radius-sm: 4px;
+    --radius-md: 6px;
+    --radius-lg: 8px;
     --speed: 180ms;
     --chrome-height: 114px;
 }
@@ -115,6 +115,8 @@ a:hover {
     align-items: center;
     justify-content: space-between;
     padding: 10px 16px;
+    -webkit-app-region: drag;
+    gap: 12px;
 }
 
 .appTitle {
@@ -123,6 +125,7 @@ a:hover {
     letter-spacing: 0.4px;
     font-size: 1.6rem;
     color: var(--text);
+    user-select: none;
 }
 
 .appTabBar {
@@ -132,6 +135,47 @@ a:hover {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.windowActions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+    -webkit-app-region: no-drag;
+}
+
+.themeToggle {
+    -webkit-app-region: no-drag;
+}
+
+.windowControls {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    -webkit-app-region: no-drag;
+}
+
+.windowControlButton {
+    min-width: 42px;
+    min-height: 40px;
+    padding: 0 12px !important;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    line-height: 1 !important;
+}
+
+.windowControlButton span {
+    display: inline-block;
+    line-height: 1;
+}
+
+.windowControlClose:hover {
+    background: var(--danger-strong) !important;
+    border-color: var(--danger-strong) !important;
+    color: #ffffff !important;
 }
 
 .appTabBar .w3-right {
@@ -779,24 +823,79 @@ input[type="radio"] {
 }
 
 .videoSidebarControls {
-    padding: 0 12px 12px;
+    padding: 0 12px 10px;
+}
+
+.videoSidebarSearchRow {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
 }
 
 .videoSidebarSearch {
     width: 100%;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.videoFilterToggle {
+    position: relative;
+    min-width: 38px;
+    width: 38px;
+    min-height: 38px;
+    padding: 0 !important;
+    flex: 0 0 38px;
+}
+
+.videoFilterToggle i {
+    margin-right: 0 !important;
+}
+
+.videoFilterToggle.expanded,
+.videoFilterToggle.hasActiveFilters {
+    background: var(--accent-soft) !important;
+    border-color: var(--btn-border-hover) !important;
+}
+
+.videoFilterBadge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #ffffff;
+    font-size: 0.7rem;
+    line-height: 16px;
+    text-align: center;
+    font-family: var(--font-title);
+}
+
+.videoFilterPanel {
+    display: none;
+    margin-top: 8px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-md);
+    background: rgba(8, 18, 35, 0.3);
+}
+
+.videoFilterPanel.expanded {
+    display: block;
 }
 
 .videoQuickFilterRow {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
+    gap: 6px;
 }
 
 .videoQuickFilter {
-    min-height: 34px;
-    padding: 0 12px !important;
-    font-size: 0.9rem;
+    min-height: 30px;
+    padding: 0 10px !important;
+    font-size: 0.84rem;
 }
 
 .videoQuickFilter.active {
@@ -807,17 +906,24 @@ input[type="radio"] {
 
 .videoQuickFilterFooter {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
-    margin-top: 10px;
+    margin-top: 8px;
 }
 
 .videoTypeQuickFilter {
     flex: 1 1 auto;
+    min-height: 34px;
+}
+
+.videoQuickFilterClear {
+    min-height: 34px;
+    padding: 0 12px !important;
+    font-size: 0.84rem;
 }
 
 .videoSidebarMeta {
-    margin: 10px 0 0 !important;
+    margin: 8px 0 0 !important;
 }
 
 .videoListTitleLink.sidebarHeader + .videoListSectionTitle {

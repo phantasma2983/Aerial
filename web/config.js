@@ -21,6 +21,7 @@ let videoQuickFilters = {
     userAddedOnly: false,
     type: "all"
 };
+let videoFiltersExpanded = false;
 let latestCacheDiagnostics = null;
 let cacheDiagnosticsRefreshToken = 0;
 let latestLogDiagnostics = null;
@@ -136,6 +137,55 @@ function toggleTheme() {
     const currentTheme = document.body.getAttribute("data-theme") ?? "dark";
     applyTheme(currentTheme === "dark" ? "light" : "dark");
 }
+
+function updateWindowControlState(windowState = {}) {
+    const maximizeButton = document.getElementById("windowMaximize");
+    const maximizeIcon = document.getElementById("windowMaximizeIcon");
+    if (!maximizeButton || !maximizeIcon) {
+        return;
+    }
+    const isMaximized = Boolean(windowState.isMaximized);
+    maximizeButton.setAttribute("aria-label", isMaximized ? "Restore window" : "Maximize window");
+    maximizeButton.setAttribute("title", isMaximized ? "Restore" : "Maximize");
+    maximizeIcon.innerHTML = isMaximized ? "&#x2750;" : "&#9633;";
+}
+
+async function refreshWindowControlState() {
+    try {
+        const windowState = await electron.ipcRenderer.invoke("getWindowState");
+        updateWindowControlState(windowState);
+    } catch {
+        updateWindowControlState({isMaximized: false});
+    }
+}
+
+function minimizeConfigWindow() {
+    electron.ipcRenderer.send("windowControl", "minimize");
+}
+
+function toggleConfigWindowMaximize() {
+    electron.ipcRenderer.send("windowControl", "toggleMaximize");
+}
+
+function closeConfigWindow() {
+    electron.ipcRenderer.send("windowControl", "close");
+}
+
+electron.ipcRenderer.on("windowStateChanged", (windowState) => {
+    updateWindowControlState(windowState);
+});
+
+const topHeader = document.querySelector(".topHeader");
+if (topHeader) {
+    topHeader.addEventListener("dblclick", (event) => {
+        if (event.target.closest(".windowActions")) {
+            return;
+        }
+        toggleConfigWindowMaximize();
+    });
+}
+
+refreshWindowControlState();
 
 function bindAboutLinks() {
     const repositoryUrl = electron.store.get("repositoryUrl");
@@ -1701,13 +1751,17 @@ function toggleVideoQuickFilter(filterKey) {
     makeList();
 }
 
+function toggleVideoFilterPanel() {
+    videoFiltersExpanded = !videoFiltersExpanded;
+    makeList();
+}
+
 function setVideoTypeQuickFilter(value) {
     videoQuickFilters.type = value;
     makeList();
 }
 
-function clearVideoFilters() {
-    videoSearchQuery = "";
+function clearVideoQuickFilters() {
     videoQuickFilters = {
         checkedOnly: false,
         downloadedOnly: false,
@@ -1716,6 +1770,31 @@ function clearVideoFilters() {
         type: "all"
     };
     makeList();
+}
+
+function clearVideoFilters() {
+    videoSearchQuery = "";
+    clearVideoQuickFilters();
+}
+
+function getActiveVideoQuickFilterCount() {
+    let count = 0;
+    if (videoQuickFilters.checkedOnly) {
+        count++;
+    }
+    if (videoQuickFilters.downloadedOnly) {
+        count++;
+    }
+    if (videoQuickFilters.favoritesOnly) {
+        count++;
+    }
+    if (videoQuickFilters.userAddedOnly) {
+        count++;
+    }
+    if (videoQuickFilters.type !== "all") {
+        count++;
+    }
+    return count;
 }
 
 function getVisibleVideoIndices() {
@@ -1795,23 +1874,37 @@ function makeList() {
     const pinnedFavoriteIndices = visibleIndices.filter((index) => favoriteSet.has(videos[index].id));
     const regularIndices = visibleIndices.filter((index) => !favoriteSet.has(videos[index].id));
     const types = Array.from(new Set(videos.map((video) => video.type).filter(Boolean)));
+    const activeQuickFilterCount = getActiveVideoQuickFilterCount();
     let videoList = `<div class='videoListTitleLink sidebarHeader'>
             <div class="videoSidebarHeader">
                 <h3 class="w3-bar-item videoListTitle"><i class="fa fa-film"></i> Videos</h3>
                 <div class="videoSidebarControls">
-                    <input id="videoSidebarSearch" class="w3-input videoSidebarSearch" type="text" placeholder="Search videos" value="${escapeHtml(videoSearchQuery)}" oninput="setVideoSearch(this.value)">
-                    <div class="videoQuickFilterRow">
-                        <button class="videoQuickFilter ${videoQuickFilters.checkedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('checkedOnly')">Checked</button>
-                        <button class="videoQuickFilter ${videoQuickFilters.downloadedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('downloadedOnly')">Downloaded</button>
-                        <button class="videoQuickFilter ${videoQuickFilters.favoritesOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('favoritesOnly')">Favorites</button>
-                        <button class="videoQuickFilter ${videoQuickFilters.userAddedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('userAddedOnly')">User Added</button>
+                    <div class="videoSidebarSearchRow">
+                        <input id="videoSidebarSearch" class="w3-input videoSidebarSearch" type="text" placeholder="Search videos" value="${escapeHtml(videoSearchQuery)}" oninput="setVideoSearch(this.value)">
+                        <button
+                            class="videoFilterToggle ${videoFiltersExpanded ? "expanded" : ""} ${activeQuickFilterCount > 0 ? "hasActiveFilters" : ""}"
+                            onclick="toggleVideoFilterPanel()"
+                            aria-label="${videoFiltersExpanded ? "Hide filters" : "Show filters"}"
+                            aria-expanded="${videoFiltersExpanded ? "true" : "false"}"
+                            title="${videoFiltersExpanded ? "Hide filters" : "Show filters"}">
+                            <i class="fa fa-filter" aria-hidden="true"></i>
+                            ${activeQuickFilterCount > 0 ? `<span class="videoFilterBadge">${activeQuickFilterCount}</span>` : ""}
+                        </button>
                     </div>
-                    <div class="videoQuickFilterFooter">
-                        <select class="w3-select videoTypeQuickFilter" onchange="setVideoTypeQuickFilter(this.value)">
-                            <option value="all">All types</option>
-                            ${types.map((type) => `<option value="${type}" ${videoQuickFilters.type === type ? "selected" : ""}>${escapeHtml(type.charAt(0).toUpperCase() + type.slice(1))}</option>`).join("")}
-                        </select>
-                <button class="w3-button w3-white w3-border w3-round-large" onclick="clearVideoFilters()">Clear</button>
+                    <div class="videoFilterPanel ${videoFiltersExpanded ? "expanded" : ""}">
+                        <div class="videoQuickFilterRow">
+                            <button class="videoQuickFilter ${videoQuickFilters.checkedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('checkedOnly')">Checked</button>
+                            <button class="videoQuickFilter ${videoQuickFilters.downloadedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('downloadedOnly')">Downloaded</button>
+                            <button class="videoQuickFilter ${videoQuickFilters.favoritesOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('favoritesOnly')">Favorites</button>
+                            <button class="videoQuickFilter ${videoQuickFilters.userAddedOnly ? "active" : ""}" onclick="toggleVideoQuickFilter('userAddedOnly')">User Added</button>
+                        </div>
+                        <div class="videoQuickFilterFooter">
+                            <select class="w3-select videoTypeQuickFilter" onchange="setVideoTypeQuickFilter(this.value)">
+                                <option value="all">All types</option>
+                                ${types.map((type) => `<option value="${type}" ${videoQuickFilters.type === type ? "selected" : ""}>${escapeHtml(type.charAt(0).toUpperCase() + type.slice(1))}</option>`).join("")}
+                            </select>
+                            <button class="w3-button w3-white w3-border videoQuickFilterClear" onclick="clearVideoQuickFilters()">Reset</button>
+                        </div>
                     </div>
                     <p class="w3-small videoSidebarMeta">Showing ${visibleIndices.length} of ${videos.length} videos</p>
                 </div>

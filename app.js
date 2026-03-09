@@ -997,6 +997,9 @@ function createConfigWindow(argv) {
     let win = new BrowserWindow({
         width: 1080,
         height: 810,
+        frame: false,
+        thickFrame: true,
+        backgroundColor: "#0b1220",
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -1020,6 +1023,27 @@ function createConfigWindow(argv) {
     }
     win.setMenuBarVisibility(false);
     win.loadFile('web/config.html');
+    const sendConfigWindowState = () => {
+        if (!win || win.isDestroyed()) {
+            return;
+        }
+        win.webContents.send('windowStateChanged', {
+            isMaximized: win.isMaximized()
+        });
+    };
+    win.on('maximize', sendConfigWindowState);
+    win.on('unmaximize', sendConfigWindowState);
+    win.webContents.once('did-finish-load', sendConfigWindowState);
+    win.on('close', (event) => {
+        if (isAppQuitting || launchedAsScreensaverSession) {
+            return;
+        }
+        if (store.get('useTray')) {
+            event.preventDefault();
+            win.hide();
+            createTrayWindow();
+        }
+    });
     win.webContents.on('before-input-event', (event, input) => {
         const key = String(input.key || "").toUpperCase();
         const isDevToolsKey = input.type === 'keyDown' && (
@@ -1415,6 +1439,37 @@ ipcMain.on('store-set-sync', (event, payload) => {
     }
     store.set(payload.key, payload.value);
     event.returnValue = true;
+});
+
+ipcMain.on('windowControl', (event, action) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) {
+        return;
+    }
+    switch (action) {
+    case 'minimize':
+        win.minimize();
+        break;
+    case 'toggleMaximize':
+        if (win.isMaximized()) {
+            win.unmaximize();
+        } else {
+            win.maximize();
+        }
+        break;
+    case 'close':
+        win.close();
+        break;
+    default:
+        break;
+    }
+});
+
+ipcMain.handle('getWindowState', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return {
+        isMaximized: Boolean(win && !win.isDestroyed() && win.isMaximized())
+    };
 });
 
 async function bootstrap() {

@@ -15,19 +15,19 @@ function storeSetSync(key, value) {
 contextBridge.exposeInMainWorld("electron", {
     ipcRenderer: {
         send: (channel, data) => {
-            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "consoleLog"];
+            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "consoleLog", "windowControl"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.send(channel, data);
             }
         },
         on: (channel, func) => {
-            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "showWelcome", "updateAttribute", "screenNumber"];
+            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "showWelcome", "updateAttribute", "screenNumber", "windowStateChanged"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.on(channel, (event, ...args) => func(...args));
             }
         },
         invoke: (channel, args) => {
-            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "getWeatherData", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics"];
+            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "getWeatherData", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics", "getWindowState"];
             if (validChannels.includes(channel)) {
                 return ipcRenderer.invoke(channel, args);
             }
