@@ -53,6 +53,7 @@ const SunCalc = require('suncalc');
 const UPSTREAM_REPO_URL = "https://github.com/OrangeJedi/Aerial";
 let store;
 let weatherDataRequest = null;
+let minimalModeCountdownInterval = null;
 
 async function initializeStore() {
     const {default: Store} = await import('electron-store');
@@ -1581,9 +1582,13 @@ function setUpConfigFile() {
     //start up settings
     store.set('useTray', store.get('useTray') ?? true);
     store.set('startAfter', store.get('startAfter') ?? 10);
-    store.set('blankScreen', store.get('blankScreen') ?? true);
-    store.set('blankAfter', store.get('blankAfter') ?? 30);
-    store.set('sleepAfterBlank', store.get('sleepAfterBlank') ?? true);
+    const legacyBlankScreen = store.get('blankScreen');
+    const legacyBlankAfter = store.get('blankAfter');
+    const legacySleepAfterBlank = store.get('sleepAfterBlank');
+    store.set('minimalMode', store.get('minimalMode') ?? legacyBlankScreen ?? true);
+    store.set('minimalModeAfter', store.get('minimalModeAfter') ?? legacyBlankAfter ?? 30);
+    store.set('sleepAfterMinimalMode', store.get('sleepAfterMinimalMode') ?? legacySleepAfterBlank ?? true);
+    store.set('minimalTimeFormat', store.get('minimalTimeFormat') ?? "");
     store.set('lockAfterRun', store.get('lockAfterRun') ?? false);
     store.set('lockAfterRunAfter', store.get('lockAfterRunAfter') ?? 15);
     store.set('runOnBattery', store.get('runOnBattery') ?? true);
@@ -1685,6 +1690,13 @@ function setUpConfigFile() {
     store.set('textFontWeight', store.get('textFontWeight') ?? "400");
     store.set('textFadeInDuration', store.get('textFadeInDuration') ?? 650);
     store.set('textFadeOutDuration', store.get('textFadeOutDuration') ?? 260);
+    store.set('minimalModeDefaultFont', store.get('minimalModeDefaultFont') ?? true);
+    store.set('minimalModeFont', store.get('minimalModeFont') ?? store.get('textFont'));
+    store.set('minimalModeFontSize', store.get('minimalModeFontSize') ?? store.get('textSize'));
+    store.set('minimalModeFontSizeUnit', store.get('minimalModeFontSizeUnit') ?? store.get('textSizeUnit'));
+    store.set('minimalModeFontColor', store.get('minimalModeFontColor') ?? store.get('textColor'));
+    store.set('minimalModeOpacity', store.get('minimalModeOpacity') ?? store.get('textOpacity'));
+    store.set('minimalModeFontWeight', store.get('minimalModeFontWeight') ?? store.get('textFontWeight'));
     let displayText = store.get('displayText');
     if (displayText) {
         if (!displayText.topleft[0]) {
@@ -2032,6 +2044,19 @@ ipcMain.on('selectFile', async (event, args) => {
 
 ipcMain.on('openPreview', (event) => {
     createSSWindow(process.argv);
+});
+
+ipcMain.on('openMinimalPreview', () => {
+    if (screens.length === 0) {
+        createSSWindow(process.argv);
+        setTimeout(() => {
+            if (screens.length > 0) {
+                enterMinimalMode();
+            }
+        }, 1500);
+        return;
+    }
+    enterMinimalMode();
 });
 
 ipcMain.on('openInfoEditor', (event) => {
@@ -2462,6 +2487,10 @@ function quitApp() {
 
 function closeAllWindows() {
     logLifecycle("closeAllWindows:start", {trackedScreens: screens.length});
+    if (minimalModeCountdownInterval) {
+        clearInterval(minimalModeCountdownInterval);
+        minimalModeCountdownInterval = null;
+    }
     const windowsToClose = [...screens];
     for (let i = 0; i < windowsToClose.length; i++) {
         if (!windowsToClose[i].isDestroyed()) {
@@ -2526,24 +2555,33 @@ setInterval(() => {
 function onFirstVideoPlayed() {
     let startTime = new Date();
     setTimeOfDayList();
-    if (store.get('blankScreen')) {
-        let interval = setInterval(() => {
+    if (minimalModeCountdownInterval) {
+        clearInterval(minimalModeCountdownInterval);
+        minimalModeCountdownInterval = null;
+    }
+    if (store.get('minimalMode')) {
+        minimalModeCountdownInterval = setInterval(() => {
             if (screens.length === 0) {
-                clearTimeout(interval);
+                clearInterval(minimalModeCountdownInterval);
+                minimalModeCountdownInterval = null;
                 return;
             }
-            if (new Date() - startTime >= store.get('blankAfter') * 60 * 1000) {
-                blankScreensaver();
+            if (new Date() - startTime >= store.get('minimalModeAfter') * 60 * 1000) {
+                enterMinimalMode();
             }
         }, 30000);
     }
 }
 
-function blankScreensaver() {
+function enterMinimalMode() {
+    if (minimalModeCountdownInterval) {
+        clearInterval(minimalModeCountdownInterval);
+        minimalModeCountdownInterval = null;
+    }
     for (let i = 0; i < screens.length; i++) {
-        screens[i].webContents.send('blankTheScreen');
-        if (store.get('sleepAfterBlank')) {
-            //sleep the computer after a few seconds of blank screen
+        screens[i].webContents.send('enterMinimalMode');
+        if (store.get('sleepAfterMinimalMode')) {
+            //sleep the computer after a few seconds of minimal mode
             setTimeout(() => {
                 sleepComputer()
             }, store.get('videoTransitionLength') * 3)

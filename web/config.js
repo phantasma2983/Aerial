@@ -28,6 +28,19 @@ let latestLogDiagnostics = null;
 let pendingProfileSelectionId = "";
 refreshVideoCatalog();
 
+const CUSTOM_FORMAT_SENTINEL = "__custom__";
+const LOCALE_FORMAT_SENTINEL = "__locale__";
+const COMMON_TIME_FORMAT_PRESETS = [
+    {label: "24-hour", value: "HH:mm"},
+    {label: "24-hour + seconds", value: "HH:mm:ss"},
+    {label: "12-hour", value: "h:mm A"},
+    {label: "Weekday + time", value: "ddd / HH:mm"},
+    {label: "Time + date", value: "HH:mm / MMMM Do"},
+    {label: "Short date + time", value: "ddd, MMM Do / HH:mm"},
+    {label: "Full date", value: "dddd, MMMM Do"},
+    {label: "Full date + time", value: "dddd, MMMM Do / HH:mm"}
+];
+
 function refreshVideoCatalog() {
     const validExtraVideos = [];
     const seenExtraIds = new Set();
@@ -71,18 +84,18 @@ function syncRendererState() {
 //Updates all the <input> tags with their proper values. Called on page load
 function displaySettings() {
     syncRendererState();
-    let checked = ["timeOfDay", "skipVideosWithKey", "sameVideoOnScreens", "videoCache", "videoCacheProfiles", "videoCacheRemoveUnallowed", "avoidDuplicateVideos", "onlyShowVideoOnPrimaryMonitor", "videoQuality", "debugPlayback", "immediatelyUpdateVideoCache", "useTray", "blankScreen", "sleepAfterBlank", "lockAfterRun", "alternateRenderMethod", "alternateRenderAuto", "useLocationForSunrise", "runOnBattery", "disableWhenFullscreenAppActive", "enableGlobalShortcut"];
+    let checked = ["timeOfDay", "skipVideosWithKey", "sameVideoOnScreens", "videoCache", "videoCacheProfiles", "videoCacheRemoveUnallowed", "avoidDuplicateVideos", "onlyShowVideoOnPrimaryMonitor", "videoQuality", "debugPlayback", "immediatelyUpdateVideoCache", "useTray", "minimalMode", "minimalModeDefaultFont", "sleepAfterMinimalMode", "lockAfterRun", "alternateRenderMethod", "alternateRenderAuto", "useLocationForSunrise", "runOnBattery", "disableWhenFullscreenAppActive", "enableGlobalShortcut"];
     for (let i = 0; i < checked.length; i++) {
         $(`#${checked[i]}`).prop('checked', electron.store.get(checked[i]));
     }
-    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textSizeUnit", "textColor", "textLineHeight", "textFontWeight", "textFadeInDuration", "textFadeOutDuration", "startAfter", "blankAfter", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "previousSkipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
+    let numTxt = ["sunrise", "sunset", "textFont", "textSize", "textSizeUnit", "textColor", "textLineHeight", "textFontWeight", "textFadeInDuration", "textFadeOutDuration", "startAfter", "minimalModeAfter", "minimalTimeFormat", "minimalModeFont", "minimalModeFontSize", "minimalModeFontSizeUnit", "minimalModeFontColor", "minimalModeFontWeight", "fps", "latitude", "longitude", "randomSpeed", "skipKey", "previousSkipKey", "transitionType", "fillMode", "globalShortcutModifier1", "globalShortcutModifier2", "globalShortcutKey", "lockAfterRunAfter", "videoFileType"];
     for (let i = 0; i < numTxt.length; i++) {
         $(`#${numTxt[i]}`).val(electron.store.get(numTxt[i]));
     }
-    let slider = ["playbackSpeed", "videoTransitionLength", "textOpacity"];
+    let slider = ["playbackSpeed", "videoTransitionLength", "textOpacity", "minimalModeOpacity"];
     for (let i = 0; i < slider.length; i++) {
         $(`#${slider[i]}`).val(electron.store.get(slider[i]));
-        if (slider[i] === "textOpacity") {
+        if (slider[i] === "textOpacity" || slider[i] === "minimalModeOpacity") {
             $(`#${slider[i]}Text`).text(normalizeOpacity(electron.store.get(slider[i]), 1).toFixed(2));
         } else {
             $(`#${slider[i]}Text`).text(electron.store.get(slider[i]));
@@ -102,9 +115,11 @@ function displaySettings() {
     displayPlaybackSettings();
     displayCustomVideos();
     populateGlobalFontSelect();
+    populateMinimalModeFontSelect();
     colorTextPositionRadio();
     syncSelectedTextPositionOptions();
     updateSettingVisibility();
+    showMinimalModeTimePreview();
     renderAboutPanel();
     refreshCacheDiagnostics();
     refreshLogDiagnostics();
@@ -622,11 +637,14 @@ function updateSetting(setting, type) {
             electron.store.set(setting, document.getElementById(setting).checked);
             break;
         case "slider":
-            if (setting === "textOpacity") {
+            if (setting === "textOpacity" || setting === "minimalModeOpacity") {
                 const normalizedOpacity = normalizeOpacity(document.getElementById(setting).value, 1);
                 document.getElementById(setting).value = normalizedOpacity;
                 $(`#${setting}Text`).text(normalizedOpacity.toFixed(2));
                 electron.store.set(setting, normalizedOpacity);
+                if (setting === "minimalModeOpacity") {
+                    showMinimalModeTimePreview();
+                }
                 break;
             }
             $(`#${setting}Text`).text(document.getElementById(setting).value);
@@ -638,6 +656,9 @@ function updateSetting(setting, type) {
                 electron.store.set(setting, normalizeTextSizeUnit(document.getElementById(setting).value));
             } else {
                 electron.store.set(setting, document.getElementById(setting).value);
+            }
+            if (setting.startsWith("minimalMode")) {
+                showMinimalModeTimePreview();
             }
             break;
         case "filterSlider":
@@ -704,6 +725,66 @@ function resetFilterSettings() {
 
 //Updated input fields that may be effected by another input
 function updateSettingVisibility() {
+    const minimalModeEnabled = Boolean(electron.store.get("minimalMode"));
+    const minimalModeDefaultFontEnabled = Boolean(electron.store.get("minimalModeDefaultFont"));
+    const lockAfterRunEnabled = Boolean(electron.store.get("lockAfterRun"));
+    const minimalModeAfterInput = document.getElementById("minimalModeAfter");
+    const minimalModeSettingsGroup = document.getElementById("minimalModeSettingsGroup");
+    const minimalTimeFormatInput = document.getElementById("minimalTimeFormat");
+    const minimalModeFontInput = document.getElementById("minimalModeFont");
+    const minimalModeFontSizeInput = document.getElementById("minimalModeFontSize");
+    const minimalModeFontSizeUnitInput = document.getElementById("minimalModeFontSizeUnit");
+    const minimalModeFontColorInput = document.getElementById("minimalModeFontColor");
+    const minimalModeOpacityInput = document.getElementById("minimalModeOpacity");
+    const minimalModeFontWeightInput = document.getElementById("minimalModeFontWeight");
+    const minimalModeCustomStyleSection = document.getElementById("minimalModeCustomStyleSection");
+    const sleepAfterMinimalModeSection = document.getElementById("sleepAfterMinimalModeSection");
+    const sleepAfterMinimalModeInput = document.getElementById("sleepAfterMinimalMode");
+    const lockAfterRunDelaySection = document.getElementById("lockAfterRunDelaySection");
+    const lockAfterRunAfterInput = document.getElementById("lockAfterRunAfter");
+    if (minimalModeAfterInput) {
+        minimalModeAfterInput.disabled = !minimalModeEnabled;
+    }
+    if (minimalModeSettingsGroup) {
+        minimalModeSettingsGroup.style.display = minimalModeEnabled ? "grid" : "none";
+    }
+    if (minimalTimeFormatInput) {
+        minimalTimeFormatInput.disabled = !minimalModeEnabled;
+    }
+    if (minimalModeCustomStyleSection) {
+        minimalModeCustomStyleSection.style.display = (minimalModeEnabled && !minimalModeDefaultFontEnabled) ? "grid" : "none";
+    }
+    if (minimalModeFontInput) {
+        minimalModeFontInput.disabled = !minimalModeEnabled || minimalModeDefaultFontEnabled;
+    }
+    if (minimalModeFontSizeInput) {
+        minimalModeFontSizeInput.disabled = !minimalModeEnabled || minimalModeDefaultFontEnabled;
+    }
+    if (minimalModeFontSizeUnitInput) {
+        minimalModeFontSizeUnitInput.disabled = !minimalModeEnabled || minimalModeDefaultFontEnabled;
+    }
+    if (minimalModeFontColorInput) {
+        minimalModeFontColorInput.disabled = !minimalModeEnabled || minimalModeDefaultFontEnabled;
+    }
+    if (minimalModeOpacityInput) {
+        minimalModeOpacityInput.disabled = !minimalModeEnabled || minimalModeDefaultFontEnabled;
+    }
+    if (minimalModeFontWeightInput) {
+        minimalModeFontWeightInput.disabled = !minimalModeEnabled || minimalModeDefaultFontEnabled;
+    }
+    if (sleepAfterMinimalModeInput) {
+        sleepAfterMinimalModeInput.disabled = !minimalModeEnabled;
+    }
+    if (sleepAfterMinimalModeSection) {
+        sleepAfterMinimalModeSection.style.display = minimalModeEnabled ? "grid" : "none";
+    }
+    if (lockAfterRunDelaySection) {
+        lockAfterRunDelaySection.style.display = lockAfterRunEnabled ? "grid" : "none";
+    }
+    if (lockAfterRunAfterInput) {
+        lockAfterRunAfterInput.disabled = !lockAfterRunEnabled;
+    }
+
     // Shows or hides the FPS settings for the alternate render method
     if (electron.store.get("alternateRenderMethod") || electron.store.get("alternateRenderAuto")) {
         $("#alternateRenderMethodFPS").show(300);
@@ -1022,6 +1103,15 @@ function populateGlobalFontSelect() {
     fontSelect.innerHTML = getFontOptionsHtml(selectedFont);
 }
 
+function populateMinimalModeFontSelect() {
+    const fontSelect = document.getElementById("minimalModeFont");
+    if (!fontSelect) {
+        return;
+    }
+    const selectedFont = electron.store.get("minimalModeFont") ?? electron.store.get("textFont") ?? "";
+    fontSelect.innerHTML = getFontOptionsHtml(selectedFont);
+}
+
 loadScreenSelect();
 
 //handles selecting a radio button from the position image
@@ -1164,8 +1254,11 @@ function updatePositionType(position, line) {
             activeLine.timeString = activeLine.timeString || "hh:mm:ss";
             formRows += formRow(
                 "Time Format",
-                `<input id="positionTimeFormat" class="w3-input positionInputMedium" value="${attrEscape(activeLine.timeString)}" oninput="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}','${line}', 'timeString')" onchange="showMomentDisplay('positionTimeDisplay', this); updateTextSetting(this, '${position}','${line}', 'timeString')">
-                 <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.timeString)}</span>`,
+                `<div class="formatFieldGroup">
+                    <input id="positionTimeFormat" class="w3-input positionInputMedium" value="${attrEscape(activeLine.timeString)}" oninput="showMomentDisplay('positionTimeDisplay', this); syncTimeFormatPresetSelect('positionTimePreset', this.value, false); updateTextSetting(this, '${position}','${line}', 'timeString')" onchange="showMomentDisplay('positionTimeDisplay', this); syncTimeFormatPresetSelect('positionTimePreset', this.value, false); updateTextSetting(this, '${position}','${line}', 'timeString')">
+                    <select id="positionTimePreset" class="formatPresetSelect" onchange="applyTextTimePreset('${position}','${line}', this.value)">${buildTimeFormatPresetOptions(activeLine.timeString, false)}</select>
+                    <span id="positionTimeDisplay" class="positionPreviewValue">${moment().format(activeLine.timeString)}</span>
+                 </div>`,
                 "positionTimeFormat"
             );
             formRows += formRow("Format Help", helpButtonHtml);
@@ -1751,6 +1844,51 @@ function toggleVideoQuickFilter(filterKey) {
     makeList();
 }
 
+const minimalModeLocalePreviewFormatter = new Intl.DateTimeFormat(undefined, {timeStyle: "short"});
+
+function getMinimalModePreviewStyle() {
+    const useDefaultFont = electron.store.get("minimalModeDefaultFont") ?? true;
+    return {
+        fontFamily: useDefaultFont
+            ? (electron.store.get("textFont") ?? "Segoe UI")
+            : (electron.store.get("minimalModeFont") || electron.store.get("textFont") || "Segoe UI"),
+        fontSize: getFontSizeCssValue(
+            useDefaultFont ? electron.store.get("textSize") : electron.store.get("minimalModeFontSize"),
+            useDefaultFont ? electron.store.get("textSizeUnit") : electron.store.get("minimalModeFontSizeUnit"),
+            normalizeFontSizeValue(electron.store.get("textSize"), 2),
+            normalizeTextSizeUnit(electron.store.get("textSizeUnit"))
+        ),
+        color: useDefaultFont
+            ? (electron.store.get("textColor") ?? "#FFFFFF")
+            : (electron.store.get("minimalModeFontColor") || electron.store.get("textColor") || "#FFFFFF"),
+        fontWeight: useDefaultFont
+            ? (electron.store.get("textFontWeight") ?? "400")
+            : (electron.store.get("minimalModeFontWeight") || electron.store.get("textFontWeight") || "400"),
+        opacity: useDefaultFont
+            ? normalizeOpacity(electron.store.get("textOpacity"), 1)
+            : normalizeOpacity(electron.store.get("minimalModeOpacity"), normalizeOpacity(electron.store.get("textOpacity"), 1))
+    };
+}
+
+function showMinimalModeTimePreview() {
+    const input = document.getElementById("minimalTimeFormat");
+    const preview = document.getElementById("minimalTimeFormatPreview");
+    if (!input || !preview) {
+        return;
+    }
+    const format = String(input.value ?? "").trim();
+    syncTimeFormatPresetSelect("minimalTimeFormatPreset", format, true);
+    preview.textContent = format
+        ? moment().format(format)
+        : minimalModeLocalePreviewFormatter.format(new Date());
+    const style = getMinimalModePreviewStyle();
+    preview.style.fontFamily = `"${style.fontFamily}"`;
+    preview.style.fontSize = style.fontSize;
+    preview.style.color = `${style.color}`;
+    preview.style.fontWeight = `${style.fontWeight}`;
+    preview.style.opacity = `${style.opacity}`;
+}
+
 function toggleVideoFilterPanel() {
     videoFiltersExpanded = !videoFiltersExpanded;
     makeList();
@@ -2171,6 +2309,56 @@ function showMomentDisplay(id, stringID) {
     $(`#${id}`).text(moment().format(stringID.value));
 }
 
+function buildTimeFormatPresetOptions(value, includeLocale = false) {
+    const normalized = String(value ?? "").trim();
+    const optionList = includeLocale
+        ? [{label: "Locale", value: LOCALE_FORMAT_SENTINEL}, ...COMMON_TIME_FORMAT_PRESETS]
+        : COMMON_TIME_FORMAT_PRESETS;
+    let selectedValue = normalized;
+    if (includeLocale && normalized === "") {
+        selectedValue = LOCALE_FORMAT_SENTINEL;
+    }
+    const matchesPreset = optionList.some((preset) => preset.value === selectedValue);
+    let html = "";
+    if (!matchesPreset) {
+        html += `<option value="${CUSTOM_FORMAT_SENTINEL}" selected>Custom</option>`;
+    }
+    for (const preset of optionList) {
+        const selected = preset.value === selectedValue ? "selected" : "";
+        html += `<option value="${preset.value}" ${selected}>${preset.label}</option>`;
+    }
+    return html;
+}
+
+function syncTimeFormatPresetSelect(selectId, value, includeLocale = false) {
+    const select = document.getElementById(selectId);
+    if (!select) {
+        return;
+    }
+    select.innerHTML = buildTimeFormatPresetOptions(value, includeLocale);
+}
+
+function applyMinimalModeTimePreset(value) {
+    const input = document.getElementById("minimalTimeFormat");
+    if (!input || value === CUSTOM_FORMAT_SENTINEL) {
+        return;
+    }
+    input.value = value === LOCALE_FORMAT_SENTINEL ? "" : value;
+    updateSetting('minimalTimeFormat', 'text');
+    showMinimalModeTimePreview();
+}
+
+function applyTextTimePreset(position, line, value) {
+    const input = document.getElementById("positionTimeFormat");
+    if (!input || value === CUSTOM_FORMAT_SENTINEL) {
+        return;
+    }
+    input.value = value;
+    showMomentDisplay('positionTimeDisplay', input);
+    syncTimeFormatPresetSelect("positionTimePreset", input.value, false);
+    updateTextSetting(input, position, line, 'timeString');
+}
+
 //Autocomplete stuff
 function autocomplete(inp, arr, func) {
     /*the autocomplete function takes two arguments,
@@ -2295,14 +2483,20 @@ document.addEventListener("click", function (e) {
 electron.fontListUniversal.getFonts().then(fonts => {
     fontList = Array.from(new Set(fonts)).sort((a, b) => a.localeCompare(b));
     populateGlobalFontSelect();
+    populateMinimalModeFontSelect();
     syncSelectedTextPositionOptions();
 }).catch(() => {
     populateGlobalFontSelect();
+    populateMinimalModeFontSelect();
 });
 
 //Preview
 function openPreview() {
     electron.ipcRenderer.send('openPreview');
+}
+
+function openMinimalPreview() {
+    electron.ipcRenderer.send('openMinimalPreview');
 }
 
 function newGlobalShortcut() {

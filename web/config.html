@@ -41,6 +41,7 @@
         <button class="w3-bar-item w3-button tablink" onclick="changeTab(event,'videoTab')">Videos</button>
         <button class="w3-bar-item w3-button tablink" onclick="changeTab(event,'textTab')">Text</button>
         <button class="w3-bar-item w3-button tablink w3-right" onclick="openPreview()">Preview</button>
+        <button class="w3-bar-item w3-button tablink w3-right" onclick="openMinimalPreview()">Test Minimal Mode</button>
     </div>
 </div>
 <div class="appContent">
@@ -74,45 +75,181 @@
                     <h3>General Settings</h3>
                 </div>
                 <div class="w3-display-container cardContent settingsCardBody">
-                    <div class="settingInlineRow">
-                        <label for="startAfter">Start Aerial After</label>
-                        <input class="w3-input inlineNumberInput" type="number"
-                               id="startAfter" onchange="updateSetting('startAfter','number')" min=0>
-                        <span>minutes</span>
-                    </div>
-                    <div class="settingInlineRow">
-                        <input type="checkbox" id="blankScreen" class="w3-check"
-                               onclick="updateSetting('blankScreen','check')">
-                        <label for="blankScreen">Automatically blank screen after</label>
-                        <input class="w3-input inlineNumberInput" type="number"
-                               id="blankAfter" onchange="updateSetting('blankAfter','number')">
-                        <span>minutes</span>
-                    </div>
-                    <div class="settingInlineRow">
-                        <input type="checkbox" id="sleepAfterBlank" class="w3-check"
-                               onclick="updateSetting('sleepAfterBlank','check')">
-                        <label for="sleepAfterBlank">Sleep the computer after screen blank</label>
-                    </div>
-                    <div class="settingInlineRow">
-                        <input type="checkbox" id="lockAfterRun" class="w3-check"
-                               onclick="updateSetting('lockAfterRun','check')">
-                        <label for="lockAfterRun">Lock the computer after running</label>
-                    </div>
-                    <div class="settingInlineRow settingInlineIndentedRow">
-                        <label for="lockAfterRunAfter">Wait</label>
-                        <input class="w3-input inlineNumberInput" type="number"
-                               id="lockAfterRunAfter" onchange="updateSetting('lockAfterRunAfter','number')">
-                        <span>seconds before locking on wakeup after Aerial starts.</span>
-                    </div>
-                    <div class="settingInlineRow">
-                        <input type="checkbox" id="runOnBattery" class="w3-check"
-                               onclick="updateSetting('runOnBattery','check')">
-                        <label for="runOnBattery">Run Aerial on battery power</label>
-                    </div>
-                    <div class="settingInlineRow">
-                        <input type="checkbox" id="disableWhenFullscreenAppActive" class="w3-check"
-                               onclick="updateSetting('disableWhenFullscreenAppActive','check')">
-                        <label for="disableWhenFullscreenAppActive">Do not start when another app is fullscreen</label>
+                    <div class="formGrid generalSettingsGrid">
+                        <div class="formRow">
+                            <label class="formLabel" for="startAfter">Start Aerial After</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" type="number"
+                                       id="startAfter" onchange="updateSetting('startAfter','number')" min=0>
+                                <span>minutes</span>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="minimalMode">Switch to minimal mode after</label>
+                            <div class="formControl">
+                                <div class="positionCheckboxRow">
+                                    <input type="checkbox" id="minimalMode" class="w3-check"
+                                           onclick="updateSetting('minimalMode','check')">
+                                    <label for="minimalMode">Enabled</label>
+                                </div>
+                                <input class="w3-input textOptionInputSmall" type="number"
+                                       id="minimalModeAfter" onchange="updateSetting('minimalModeAfter','number')">
+                                <span>minutes</span>
+                            </div>
+                        </div>
+                        <div id="minimalModeSettingsGroup" class="generalSettingsGroup">
+                            <div class="formRow generalSettingsHintRow">
+                                <div class="generalSettingsHintSpacer"></div>
+                                <p class="w3-small settingHint generalSettingsNote">Minimal mode hides video and overlays, then shows only the current time on a black screen and moves it every 15 seconds. Use Windows power settings if you want the display itself to power down.</p>
+                            </div>
+                            <div class="formRow">
+                                <label class="formLabel" for="minimalTimeFormat">Minimal Time Format</label>
+                                <div class="formControl">
+                                    <input class="w3-input textOptionInputWide" type="text" id="minimalTimeFormat"
+                                           oninput="updateSetting('minimalTimeFormat','text'); showMinimalModeTimePreview()"
+                                           onchange="updateSetting('minimalTimeFormat','text'); showMinimalModeTimePreview()"
+                                           placeholder="Leave blank for locale">
+                                </div>
+                            </div>
+                            <div class="formRow">
+                                <label class="formLabel" for="minimalTimeFormatPreset">Format Preset</label>
+                                <div class="formControl">
+                                    <select id="minimalTimeFormatPreset" class="textOptionInputWide"
+                                            onchange="applyMinimalModeTimePreset(this.value)">
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="formRow">
+                                <label class="formLabel">Preview</label>
+                                <div class="formControl">
+                                    <span id="minimalTimeFormatPreview" class="positionPreviewValue"></span>
+                                </div>
+                            </div>
+                            <div class="formRow">
+                                <label class="formLabel">Format Help</label>
+                                <div class="formControl">
+                                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large positionHelpAction"
+                                            type="button"
+                                            onclick="document.getElementById('timeFormatExplain').style.display='block'">Show Formatting Details</button>
+                                </div>
+                            </div>
+                            <div class="formRow generalSettingsHintRow">
+                                <div class="generalSettingsHintSpacer"></div>
+                                <p class="w3-small settingHint generalSettingsNote">Uses the same Moment.js tokens as the regular text clock. Example: <code>HH:mm</code>. Leave it blank to use the renderer locale format.</p>
+                            </div>
+                            <div class="formRow">
+                                <label class="formLabel" for="minimalModeDefaultFont">Use Default Font</label>
+                                <div class="formControl">
+                                    <div class="positionCheckboxRow">
+                                        <input type="checkbox" id="minimalModeDefaultFont" class="w3-check"
+                                               onclick="updateSetting('minimalModeDefaultFont','check'); showMinimalModeTimePreview()">
+                                        <label for="minimalModeDefaultFont">Enabled</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="minimalModeCustomStyleSection" class="generalSettingsGroup">
+                                <div class="formRow">
+                                    <label class="formLabel" for="minimalModeFont">Font</label>
+                                    <div class="formControl">
+                                        <select id="minimalModeFont" class="textOptionInputWide"
+                                                onchange="updateSetting('minimalModeFont', 'select'); showMinimalModeTimePreview()"></select>
+                                    </div>
+                                </div>
+                                <div class="formRow">
+                                    <label class="formLabel" for="minimalModeFontSize">Font Size</label>
+                                    <div class="formControl">
+                                        <input class="w3-input textOptionInputSmall" id="minimalModeFontSize" type="number" step=".1"
+                                               oninput="updateSetting('minimalModeFontSize', 'number'); showMinimalModeTimePreview()"
+                                               onchange="updateSetting('minimalModeFontSize', 'number'); showMinimalModeTimePreview()">
+                                        <label for="minimalModeFontSizeUnit">Unit</label>
+                                        <select id="minimalModeFontSizeUnit" class="textOptionInputTiny"
+                                                onchange="updateSetting('minimalModeFontSizeUnit', 'select'); showMinimalModeTimePreview()">
+                                            <option value="vw">vw</option>
+                                            <option value="vh">vh</option>
+                                            <option value="vmin">vmin</option>
+                                            <option value="vmax">vmax</option>
+                                            <option value="rem">rem</option>
+                                            <option value="em">em</option>
+                                            <option value="px">px</option>
+                                            <option value="%">%</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div class="formRow">
+                                    <label class="formLabel" for="minimalModeFontColor">Color</label>
+                                    <div class="formControl">
+                                        <input class="w3-input positionColorInput" id="minimalModeFontColor" type="color"
+                                               oninput="updateSetting('minimalModeFontColor', 'text'); showMinimalModeTimePreview()"
+                                               onchange="updateSetting('minimalModeFontColor', 'text'); showMinimalModeTimePreview()">
+                                    </div>
+                                </div>
+                                <div class="formRow">
+                                    <label class="formLabel" for="minimalModeOpacity">Opacity</label>
+                                    <div class="formControl">
+                                        <input class="slider textOpacitySlider" id="minimalModeOpacity" type="range" min="0" max="1" step=".01"
+                                               oninput="updateSetting('minimalModeOpacity', 'slider')" onchange="updateSetting('minimalModeOpacity', 'slider')">
+                                        <span id="minimalModeOpacityText">1</span>
+                                    </div>
+                                </div>
+                                <div class="formRow">
+                                    <label class="formLabel" for="minimalModeFontWeight">Font Weight</label>
+                                    <div class="formControl">
+                                        <input class="w3-input textOptionInputSmall" id="minimalModeFontWeight"
+                                               type="number" step="100" min="100" max="900"
+                                               oninput="updateSetting('minimalModeFontWeight', 'number'); showMinimalModeTimePreview()"
+                                               onchange="updateSetting('minimalModeFontWeight', 'number'); showMinimalModeTimePreview()">
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="sleepAfterMinimalModeSection" class="formRow">
+                            <label class="formLabel" for="sleepAfterMinimalMode">Sleep the computer after minimal mode starts</label>
+                            <div class="formControl">
+                                <div class="positionCheckboxRow">
+                                    <input type="checkbox" id="sleepAfterMinimalMode" class="w3-check"
+                                           onclick="updateSetting('sleepAfterMinimalMode','check')">
+                                    <label for="sleepAfterMinimalMode">Enabled</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="lockAfterRun">Lock the computer after running</label>
+                            <div class="formControl">
+                                <div class="positionCheckboxRow">
+                                    <input type="checkbox" id="lockAfterRun" class="w3-check"
+                                           onclick="updateSetting('lockAfterRun','check')">
+                                    <label for="lockAfterRun">Enabled</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="lockAfterRunDelaySection" class="formRow">
+                            <label class="formLabel" for="lockAfterRunAfter">Wait before locking on wakeup</label>
+                            <div class="formControl">
+                                <input class="w3-input textOptionInputSmall" type="number"
+                                       id="lockAfterRunAfter" onchange="updateSetting('lockAfterRunAfter','number')">
+                                <span>seconds after Aerial starts</span>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="runOnBattery">Run Aerial on battery power</label>
+                            <div class="formControl">
+                                <div class="positionCheckboxRow">
+                                    <input type="checkbox" id="runOnBattery" class="w3-check"
+                                           onclick="updateSetting('runOnBattery','check')">
+                                    <label for="runOnBattery">Enabled</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="disableWhenFullscreenAppActive">Do not start when another app is fullscreen</label>
+                            <div class="formControl">
+                                <div class="positionCheckboxRow">
+                                    <input type="checkbox" id="disableWhenFullscreenAppActive" class="w3-check"
+                                           onclick="updateSetting('disableWhenFullscreenAppActive','check')">
+                                    <label for="disableWhenFullscreenAppActive">Enabled</label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

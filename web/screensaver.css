@@ -39,6 +39,26 @@ body {
     overflow: hidden;
 }
 
+.minimalModeOverlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    display: none;
+    opacity: 0;
+}
+
+.minimalModeTimeWrap {
+    padding: 2%;
+    box-sizing: border-box;
+}
+
+.minimalModeTime {
+    font-size: clamp(3rem, 8vw, 8rem);
+    line-height: 1;
+    letter-spacing: 0.04em;
+    text-shadow: 0 0 24px rgba(0, 0, 0, 0.45);
+}
+
 .textDisplayArea > div {
     max-width: 100%;
     white-space: normal;

@@ -1464,6 +1464,24 @@ input[type="radio"] {
     gap: 10px;
 }
 
+.generalSettingsGrid {
+    --label-width: 280px;
+}
+
+.generalSettingsGroup {
+    display: grid;
+    gap: 10px;
+    grid-column: 1 / -1;
+}
+
+.generalSettingsHintSpacer {
+    min-height: 1px;
+}
+
+.generalSettingsNote {
+    margin: 0;
+}
+
 .formRow {
     display: grid;
     grid-template-columns: var(--label-width) minmax(220px, 1fr);
@@ -1504,6 +1522,19 @@ input[type="radio"] {
 
 .positionInputTiny {
     width: min(160px, 100%);
+}
+
+.formatFieldGroup {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
+.formatPresetSelect {
+    width: min(220px, 100%);
+    min-height: 38px;
 }
 
 .positionTextarea {
@@ -1639,7 +1670,7 @@ input[type="radio"] {
     }
 }
 
-@media (max-width: 1120px) {
+@media (max-width: 1040px) {
     .topHeader {
         flex-wrap: wrap;
         gap: 10px;
@@ -1669,6 +1700,15 @@ input[type="radio"] {
 
     .formGrid {
         --label-width: 180px;
+    }
+
+    .generalSettingsGrid {
+        --label-width: 1fr;
+    }
+
+    .generalSettingsGrid .formRow,
+    .generalSettingsGroup .formRow {
+        grid-template-columns: 1fr;
     }
 }
 

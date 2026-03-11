@@ -13,11 +13,17 @@ let currentlyPlaying = '';
 let transitionTimeout;
 let poiTimeout = [];
 let blackScreen = false;
+let minimalModeActive = false;
 let previousErrorId = "";
 let numErrors = 1;
 let screenNumber = null;
 let randomType, randomDirection;
 let nextVideoTimeout;
+let randomInitialTimeout = null;
+let randomInterval = null;
+let minimalModeClockTimeout = null;
+let minimalModeMoveInterval = null;
+let minimalModeCurrentPosition = "";
 const videoChangeState = {
     inProgress: false,
     queuedDirection: null,
@@ -75,10 +81,20 @@ const textFadeInDuration = getTextTransitionDurationMs("textFadeInDuration", 650
 const textFadeOutDuration = getTextTransitionDurationMs("textFadeOutDuration", 260);
 const globalDefaultTextOpacity = normalizeOpacity(electron.store.get("textOpacity"), 1);
 const WEATHER_RENDER_CHECK_MS = 5 * 60 * 1000;
+const MINIMAL_MODE_MOVE_MS = 15 * 1000;
 const WEATHER_ICON_BASE_PATH = "../assets/weather-icons/lucide";
+const minimalModeTimeFormatter = new Intl.DateTimeFormat(undefined, {timeStyle: "short"});
 let weatherDisplayTimeout = null;
 let weatherDisplayRequest = null;
 let latestWeatherData = electron.store.get("weatherData") ?? null;
+const minimalModeOverlay = document.getElementById("minimalModeOverlay");
+
+function clearWeatherDisplayRefresh() {
+    if (weatherDisplayTimeout) {
+        clearTimeout(weatherDisplayTimeout);
+        weatherDisplayTimeout = null;
+    }
+}
 
 function normalizeWeatherUnit(unit) {
     return unit === "f" ? "f" : "c";
@@ -132,16 +148,17 @@ function buildWeatherMarkup(snapshot, unit) {
 }
 
 function renderWeatherHosts() {
+    if (blackScreen) {
+        return;
+    }
     document.querySelectorAll(".weatherOverlayHost").forEach((element) => {
         element.innerHTML = buildWeatherMarkup(latestWeatherData, element.dataset.weatherUnit);
     });
 }
 
 function scheduleWeatherDisplayRefresh() {
-    if (weatherDisplayTimeout) {
-        clearTimeout(weatherDisplayTimeout);
-    }
-    if (!document.querySelector(".weatherOverlayHost")) {
+    clearWeatherDisplayRefresh();
+    if (blackScreen || !document.querySelector(".weatherOverlayHost")) {
         return;
     }
     weatherDisplayTimeout = setTimeout(() => {
@@ -150,7 +167,7 @@ function scheduleWeatherDisplayRefresh() {
 }
 
 function refreshWeatherDisplay(force = false) {
-    if (!document.querySelector(".weatherOverlayHost")) {
+    if (blackScreen || !document.querySelector(".weatherOverlayHost")) {
         return Promise.resolve(latestWeatherData);
     }
     if (weatherDisplayRequest) {
@@ -168,7 +185,9 @@ function refreshWeatherDisplay(force = false) {
         })
         .finally(() => {
             weatherDisplayRequest = null;
-            scheduleWeatherDisplayRefresh();
+            if (!blackScreen) {
+                scheduleWeatherDisplayRefresh();
+            }
         });
     return weatherDisplayRequest;
 }
@@ -503,6 +522,9 @@ function switchVideoContainers() {
 }
 
 function drawDynamicText() {
+    if (blackScreen) {
+        return;
+    }
     let videoInfo;
     if (currentlyPlaying[0] === "_") {
         videoInfo = customVideos[customVideos.findIndex((e) => {
@@ -723,6 +745,9 @@ function fadeVideoIn(time, onComplete) {
 }
 
 function changePOI(position, line, currentPOI, poiList) {
+    if (blackScreen) {
+        return;
+    }
     poiTimeout = clearTimeouts(poiTimeout);
     let poiS = Object.keys(poiList);
     for (let i = 0; i < poiS.length; i++) {
@@ -764,6 +789,12 @@ function drawVideo(dt) {
     ctx1.filter = filterString;
     ctx1.globalCompositeOperation = "source-over";
     ctx1.globalAlpha = 1;
+    if (minimalModeActive) {
+        ctx1.fillStyle = "#000000";
+        ctx1.fillRect(0, 0, window.innerWidth, window.innerHeight);
+        requestAnimationFrame(drawVideo);
+        return;
+    }
     if (transitionPercent < 1) {
         if (transitionSource === "fadeout") {
             drawImage(ctx1, containers[currentPlayer]);
@@ -1048,21 +1079,215 @@ let displayText = electron.store.get('displayText') ?? [];
 let html = "";
 let textOverlayInitialized = false;
 
+function getPositionAlignmentClass(position) {
+    if (position.includes("left")) {
+        return "w3-left-align";
+    }
+    if (position.includes("middle")) {
+        return "w3-center";
+    }
+    if (position.includes("right")) {
+        return "w3-right-align";
+    }
+    return "";
+}
+
+function clearDisplayTextTimers() {
+    if (!displayText?.positionList) {
+        return;
+    }
+    for (const position of displayText.positionList) {
+        if (displayText[position]?.clockTimeout) {
+            clearTimeout(displayText[position].clockTimeout);
+            displayText[position].clockTimeout = null;
+        }
+        const lines = Array.isArray(displayText[position]) ? displayText[position] : [];
+        for (const line of lines) {
+            if (line?.clockTimeout) {
+                clearTimeout(line.clockTimeout);
+                line.clockTimeout = null;
+            }
+        }
+    }
+}
+
+function stopStandardOverlayActivity() {
+    clearTimeout(nextVideoTimeout);
+    clearVideoWaitingTimeout();
+    clearTimeout(transitionTimeout);
+    clearTimeout(textTransitionTimeout);
+    clearTimeout(initialTextFadeFallbackTimeout);
+    clearTimeout(randomInitialTimeout);
+    clearTimeout(minimalModeClockTimeout);
+    clearInterval(randomInterval);
+    clearInterval(minimalModeMoveInterval);
+    initialTextFadeFallbackTimeout = null;
+    randomInitialTimeout = null;
+    randomInterval = null;
+    minimalModeClockTimeout = null;
+    minimalModeMoveInterval = null;
+    videoChangeState.queuedDirection = null;
+    videoChangeState.inProgress = false;
+    poiTimeout = clearTimeouts(poiTimeout);
+    clearDisplayTextTimers();
+    clearWeatherDisplayRefresh();
+
+    const overlay = document.getElementById("textDisplayArea");
+    stopOpacityAnimation(overlay);
+    if (overlay) {
+        overlay.style.opacity = "0";
+        overlay.style.display = "none";
+        overlay.innerHTML = "";
+    }
+}
+
+function getMinimalModePositions() {
+    return (displayText?.positionList ?? []).filter((position) => position !== "random");
+}
+
+function chooseNextMinimalModePosition(currentPosition = "") {
+    const positions = getMinimalModePositions();
+    if (positions.length <= 1) {
+        return positions[0] ?? "middle";
+    }
+    let nextPosition = currentPosition;
+    while (nextPosition === currentPosition) {
+        nextPosition = positions[randomInt(0, positions.length - 1)];
+    }
+    return nextPosition;
+}
+
+function formatMinimalModeTime(date = new Date()) {
+    const customFormat = String(electron.store.get("minimalTimeFormat") ?? "").trim();
+    if (customFormat) {
+        return moment(date).format(customFormat);
+    }
+    return minimalModeTimeFormatter.format(date);
+}
+
+function getMinimalModeClockStyles() {
+    const useDefaultFont = electron.store.get("minimalModeDefaultFont") ?? true;
+    const baseFontSizeValue = normalizeFontSizeValue(electron.store.get('textSize'), 2);
+    const baseFontSizeUnit = normalizeFontSizeUnit(electron.store.get('textSizeUnit'), "vw");
+    return {
+        fontFamily: useDefaultFont
+            ? electron.store.get('textFont')
+            : (electron.store.get('minimalModeFont') || electron.store.get('textFont')),
+        fontSize: getFontSizeCssValue(
+            useDefaultFont ? electron.store.get('textSize') : electron.store.get('minimalModeFontSize'),
+            useDefaultFont ? electron.store.get('textSizeUnit') : electron.store.get('minimalModeFontSizeUnit'),
+            baseFontSizeValue,
+            baseFontSizeUnit
+        ),
+        color: useDefaultFont
+            ? electron.store.get('textColor')
+            : (electron.store.get('minimalModeFontColor') || electron.store.get('textColor')),
+        fontWeight: useDefaultFont
+            ? electron.store.get('textFontWeight')
+            : (electron.store.get('minimalModeFontWeight') || electron.store.get('textFontWeight')),
+        opacity: useDefaultFont
+            ? globalDefaultTextOpacity
+            : normalizeOpacity(electron.store.get('minimalModeOpacity'), globalDefaultTextOpacity)
+    };
+}
+
+function applyMinimalModeClockStyles() {
+    const clock = document.getElementById("minimalModeClock");
+    if (!clock) {
+        return;
+    }
+    const styles = getMinimalModeClockStyles();
+    clock.style.fontFamily = `"${styles.fontFamily}"`;
+    clock.style.fontSize = styles.fontSize;
+    clock.style.color = `${styles.color}`;
+    clock.style.fontWeight = `${styles.fontWeight}`;
+    clock.style.opacity = `${styles.opacity}`;
+}
+
+function renderMinimalMode(position = chooseNextMinimalModePosition()) {
+    if (!minimalModeOverlay) {
+        return;
+    }
+    minimalModeCurrentPosition = position;
+    const align = getPositionAlignmentClass(position);
+    minimalModeOverlay.innerHTML = `<div class="w3-display-${position} ${align} w3-container minimalModeTimeWrap">
+            <div id="minimalModeClock" class="minimalModeTime">${formatMinimalModeTime()}</div>
+        </div>`;
+    applyMinimalModeClockStyles();
+    minimalModeOverlay.style.display = "block";
+    minimalModeOverlay.style.opacity = "1";
+    minimalModeOverlay.setAttribute("aria-hidden", "false");
+}
+
+function scheduleMinimalModeClockUpdate() {
+    clearTimeout(minimalModeClockTimeout);
+    if (!minimalModeActive) {
+        minimalModeClockTimeout = null;
+        return;
+    }
+    const now = new Date();
+    const delay = Math.max(1000, ((59 - now.getSeconds()) * 1000) + (1000 - now.getMilliseconds()));
+    minimalModeClockTimeout = setTimeout(updateMinimalModeClock, delay);
+}
+
+function updateMinimalModeClock() {
+    if (!minimalModeActive) {
+        return;
+    }
+    const clock = document.getElementById("minimalModeClock");
+    if (clock) {
+        clock.textContent = formatMinimalModeTime();
+    }
+    scheduleMinimalModeClockUpdate();
+}
+
+function showMinimalMode() {
+    minimalModeActive = true;
+    renderMinimalMode(chooseNextMinimalModePosition());
+    updateMinimalModeClock();
+    minimalModeMoveInterval = setInterval(() => {
+        if (!minimalModeActive) {
+            return;
+        }
+        const nextPosition = chooseNextMinimalModePosition(minimalModeCurrentPosition);
+        renderMinimalMode(nextPosition);
+    }, MINIMAL_MODE_MOVE_MS);
+    if (metricsOverlay) {
+        metricsOverlay.style.display = "none";
+    }
+}
+
+function activateMinimalMode() {
+    if (blackScreen) {
+        return;
+    }
+    blackScreen = true;
+    stopStandardOverlayActivity();
+    fadeVideoOut(transitionLength);
+    fadeTextOut(transitionLength);
+    setTimeout(() => {
+        containers.forEach((container) => {
+            container.pause();
+            container.removeAttribute("src");
+            container.load();
+            container.style.opacity = "0";
+        });
+        showMinimalMode();
+    }, transitionLength + 750);
+}
+
 function renderText() {
 //create content divs
+    if (blackScreen) {
+        return;
+    }
     html = "";
     for (let position of displayText.positionList) {
-        let align = "";
-        if (position.includes("left")) {
-            align = "w3-left-align"
-        } else if (position.includes("middle")) {
-            align = "w3-center"
-        } else if (position.includes("right")) {
-            align = "w3-right-align"
-        }
+        let align = getPositionAlignmentClass(position);
         html += `<div class="w3-display-${position} ${align} w3-container textDisplayArea" id="textDisplay-${position}" style="text-shadow:.05vw .05vw 0 #444"></div>`;
         $('#textDisplayArea').html(html);
     }
+    $('#textDisplayArea').css('display', "");
 //add text to the content
     for (let position of displayText.positionList) {
         if (position !== "random") {
@@ -1177,6 +1402,9 @@ function getPositionMaxWidth(position) {
 }
 
 function displayTextPosition(position, displayLocation) {
+    if (blackScreen) {
+        return;
+    }
     let selector = displayLocation ? `#textDisplay-${displayLocation}` : `#textDisplay-${position}`;
     let html = "";
     $(selector).css('width', 'auto');
@@ -1290,11 +1518,14 @@ for (let i = 0; i < displayText.random.length; i++) {
 }
 if (random) {
     displayText.random.currentLocation = "none";
-    setTimeout(switchRandomText, 750);
-    let randomInterval = setInterval(switchRandomText, electron.store.get('randomSpeed') * 1000);
+    randomInitialTimeout = setTimeout(switchRandomText, 750);
+    randomInterval = setInterval(switchRandomText, electron.store.get('randomSpeed') * 1000);
 }
 
 function switchRandomText() {
+    if (blackScreen) {
+        return;
+    }
     if (randomTextTransitionInProgress) {
         return;
     }
@@ -1352,18 +1583,16 @@ electron.ipcRenderer.on('newVideo', (_event, direction) => {
     newVideo(direction === "previous" ? "previous" : "next");
 });
 
+electron.ipcRenderer.on('enterMinimalMode', activateMinimalMode);
 electron.ipcRenderer.on('blankTheScreen', () => {
-    blackScreen = true;
-    fadeVideoOut(transitionLength);
-    fadeTextOut(transitionLength)
-    setTimeout(() => {
-        containers[0].src = "";
-        containers[1].src = "";
-    }, transitionLength + 750);
+    activateMinimalMode();
 });
 
 electron.ipcRenderer.on('screenNumber', (number) => {
     screenNumber = number;
+    if (blackScreen) {
+        return;
+    }
     if (!textOverlayInitialized) {
         initializeTextOverlay();
         ensureMetricsOverlay();
