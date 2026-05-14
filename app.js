@@ -16,6 +16,7 @@ const {
 const {exec, execFile, execFileSync} = require('child_process');
 const bundledVideos = require("./videos.json");
 const packageMetadata = require("./package.json");
+const {autoUpdater} = require("electron-updater");
 const https = require('https');
 const fs = require('fs');
 const path = require("path");
@@ -25,6 +26,7 @@ const APP_ICON_PATH = path.join(__dirname, 'icon.ico');
 const APP_USER_MODEL_ID = "com.phantasma2983.aerial";
 const LEGACY_UNINSTALL_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\17c6ea6b-270a-5297-8e23-9bcda4a29a48";
 const APPID_UNINSTALL_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\7d047ff4-f1b4-58c5-a9ab-6eaec19eeed0";
+let geolocationPermissionHandlersConfigured = false;
 
 if (process.platform === "win32") {
     app.setAppUserModelId(APP_USER_MODEL_ID);
@@ -155,6 +157,32 @@ function appendBoundedLogLine(fileName, line, maxBytes) {
         // best-effort diagnostics only
     }
     fs.appendFileSync(logPath, payload);
+}
+
+function isConfigGeolocationUrl(url = "") {
+    return String(url ?? "").replace(/\\/g, "/").includes("/web/config.html");
+}
+
+function configureGeolocationPermissionHandlers(targetSession) {
+    if (!targetSession || geolocationPermissionHandlersConfigured) {
+        return;
+    }
+    geolocationPermissionHandlersConfigured = true;
+    targetSession.setPermissionCheckHandler((webContents, permission, requestingOrigin) => {
+        if (permission !== "geolocation") {
+            return false;
+        }
+        const candidateUrl = webContents?.getURL?.() || requestingOrigin || "";
+        return isConfigGeolocationUrl(candidateUrl);
+    });
+    targetSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+        if (permission === "geolocation") {
+            const candidateUrl = details?.requestingUrl || webContents?.getURL?.() || "";
+            callback(isConfigGeolocationUrl(candidateUrl));
+            return;
+        }
+        callback(false);
+    });
 }
 
 function getWeatherUnavailableSnapshot(message, latitude = null, longitude = null) {
@@ -460,6 +488,209 @@ function broadcastRendererEvent(channel, ...args) {
             win.webContents.send(channel, ...args);
         }
     }
+}
+
+function supportsInAppUpdates() {
+    return process.platform === "win32"
+        && app.isPackaged
+        && !process.env.PORTABLE_EXECUTABLE_FILE
+        && path.extname(process.execPath).toLowerCase() !== ".scr";
+}
+
+function getInAppUpdateUnavailableMessage() {
+    if (process.platform !== "win32") {
+        return "In-app updates are only supported on Windows builds.";
+    }
+    if (!app.isPackaged) {
+        return "In-app updates are available in installed builds.";
+    }
+    if (process.env.PORTABLE_EXECUTABLE_FILE) {
+        return "Portable builds still update from the release page.";
+    }
+    if (path.extname(process.execPath).toLowerCase() === ".scr") {
+        return "Screensaver artifacts still update from the release page.";
+    }
+    return "This build does not support in-app updates.";
+}
+
+function createDefaultUpdateState() {
+    const supported = supportsInAppUpdates();
+    return {
+        supported,
+        status: supported ? "idle" : "unsupported",
+        availableVersion: "",
+        releaseName: "",
+        releaseNotes: "",
+        releaseDate: "",
+        releaseUrl: appReleasesUrl,
+        progressPercent: 0,
+        bytesPerSecond: 0,
+        transferredBytes: 0,
+        totalBytes: 0,
+        error: "",
+        message: supported ? "" : getInAppUpdateUnavailableMessage()
+    };
+}
+
+function getUpdateStatePayload() {
+    return {
+        ...updateState,
+        supported: supportsInAppUpdates(),
+        releaseUrl: updateState.releaseUrl || appReleasesUrl
+    };
+}
+
+function setUpdateState(patch = {}) {
+    const supported = supportsInAppUpdates();
+    updateState = {
+        ...updateState,
+        ...patch,
+        supported,
+        releaseUrl: patch.releaseUrl ?? updateState.releaseUrl ?? appReleasesUrl
+    };
+    if (!supported && updateState.status !== "downloading" && updateState.status !== "downloaded") {
+        updateState.status = "unsupported";
+        updateState.message = updateState.availableVersion
+            ? getInAppUpdateUnavailableMessage()
+            : (updateState.message || getInAppUpdateUnavailableMessage());
+    }
+    broadcastRendererEvent("updateStateChanged", getUpdateStatePayload());
+}
+
+function normalizeReleaseNotes(notes) {
+    if (Array.isArray(notes)) {
+        return notes.map((entry) => {
+            const versionLabel = entry?.version ? `Version ${entry.version}` : "";
+            const noteText = String(entry?.note ?? "").trim();
+            return [versionLabel, noteText].filter(Boolean).join("\n");
+        }).filter(Boolean).join("\n\n").trim();
+    }
+    return String(notes ?? "").trim();
+}
+
+function applyLatestReleaseMetadata({version, publishedAt, notes, url, name}) {
+    const latestVersion = String(version ?? "").replace(/^v/i, "").trim() || app.getVersion();
+    store.set("latestReleaseVersion", latestVersion);
+    store.set("latestReleasePublishedAt", publishedAt ?? "");
+    store.set("latestReleaseNotes", normalizeReleaseNotes(notes));
+    store.set("latestReleaseUrl", url ?? appReleasesUrl);
+    store.set("latestReleaseName", name ?? "");
+    store.set("updateAvailable", compareSemver(latestVersion, app.getVersion()) > 0 ? latestVersion : false);
+    broadcastRendererEvent("displaySettings");
+    return latestVersion;
+}
+
+function applyLatestReleaseMetadataFromUpdateInfo(info) {
+    return applyLatestReleaseMetadata({
+        version: info?.version,
+        publishedAt: info?.releaseDate ?? "",
+        notes: info?.releaseNotes,
+        url: appReleasesUrl,
+        name: info?.releaseName ?? ""
+    });
+}
+
+function configureAutoUpdater() {
+    if (autoUpdaterConfigured || !supportsInAppUpdates()) {
+        return;
+    }
+    autoUpdaterConfigured = true;
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+    autoUpdater.autoRunAppAfterInstall = true;
+
+    autoUpdater.on("checking-for-update", () => {
+        setUpdateState({
+            status: "checking",
+            progressPercent: 0,
+            bytesPerSecond: 0,
+            transferredBytes: 0,
+            totalBytes: 0,
+            error: "",
+            message: "Checking for the latest installer..."
+        });
+    });
+
+    autoUpdater.on("update-available", (info) => {
+        const latestVersion = applyLatestReleaseMetadataFromUpdateInfo(info);
+        setUpdateState({
+            status: "available",
+            availableVersion: latestVersion,
+            releaseName: info?.releaseName ?? "",
+            releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+            releaseDate: info?.releaseDate ?? "",
+            releaseUrl: appReleasesUrl,
+            progressPercent: 0,
+            bytesPerSecond: 0,
+            transferredBytes: 0,
+            totalBytes: 0,
+            error: "",
+            message: `Version ${latestVersion} is ready to download.`
+        });
+    });
+
+    autoUpdater.on("update-not-available", (info) => {
+        const latestVersion = applyLatestReleaseMetadataFromUpdateInfo(info);
+        setUpdateState({
+            status: "idle",
+            availableVersion: latestVersion,
+            releaseName: info?.releaseName ?? "",
+            releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+            releaseDate: info?.releaseDate ?? "",
+            releaseUrl: appReleasesUrl,
+            progressPercent: 0,
+            bytesPerSecond: 0,
+            transferredBytes: 0,
+            totalBytes: 0,
+            error: "",
+            message: "You're already on the latest version."
+        });
+    });
+
+    autoUpdater.on("download-progress", (info) => {
+        setUpdateState({
+            status: "downloading",
+            progressPercent: Number(info?.percent ?? 0),
+            bytesPerSecond: Number(info?.bytesPerSecond ?? 0),
+            transferredBytes: Number(info?.transferred ?? 0),
+            totalBytes: Number(info?.total ?? 0),
+            error: "",
+            message: "Downloading the installer..."
+        });
+    });
+
+    autoUpdater.on("update-downloaded", (info) => {
+        const latestVersion = applyLatestReleaseMetadataFromUpdateInfo(info);
+        setUpdateState({
+            status: "downloaded",
+            availableVersion: latestVersion,
+            releaseName: info?.releaseName ?? "",
+            releaseNotes: normalizeReleaseNotes(info?.releaseNotes),
+            releaseDate: info?.releaseDate ?? "",
+            releaseUrl: appReleasesUrl,
+            progressPercent: 100,
+            error: "",
+            message: "The update is ready. Restart Aerial to install it."
+        });
+        if (app.isPackaged) {
+            new Notification({
+                title: "Aerial update ready",
+                body: `Version ${latestVersion} has finished downloading. Open Aerial and click Restart and Install.`
+            }).show();
+        }
+    });
+
+    autoUpdater.on("error", (error, message) => {
+        const errorMessage = String(message || error?.message || "Unable to update Aerial right now.");
+        setUpdateState({
+            status: "error",
+            error: errorMessage,
+            message: errorMessage
+        });
+        logLifecycle("app-update-error", {
+            message: errorMessage
+        });
+    });
 }
 
 function setRepositoryMetadata() {
@@ -798,6 +1029,10 @@ let suspendCountdown;
 let isComputerSleeping = false;
 let isComputerSuspendedOrLocked = false;
 let isAppQuitting = false;
+let updateState = createDefaultUpdateState();
+let autoUpdaterConfigured = false;
+let updateDownloadPromise = null;
+
 function parseLaunchFlags(argv) {
     const flags = {
         config: false,
@@ -1017,6 +1252,7 @@ function createConfigWindow(argv) {
         icon: APP_ICON_PATH
     });
     applyWindowsAppDetails(win);
+    configureGeolocationPermissionHandlers(win.webContents.session);
     if (typeof win.removeMenu === "function") {
         win.removeMenu();
     } else {
@@ -1081,12 +1317,14 @@ function createConfigWindow(argv) {
     });
 }
 
-function createSSWindow(argv) {
+function createSSWindow(argv, options = {}) {
+    const startMode = options.startMode === "minimal" ? "minimal" : "normal";
     logLifecycle("createSSWindow:start", {
         argv,
         nq,
         useTray: store.get('useTray'),
-        screensCount: screens.length
+        screensCount: screens.length,
+        startMode
     });
     switch (argv) {
         case undefined:
@@ -1129,7 +1367,10 @@ function createSSWindow(argv) {
         if (!renderScreensaver) {
             win.loadFile('web/black.html');
         } else {
-            win.loadFile('web/screensaver.html');
+            const loadOptions = startMode === "minimal"
+                ? {query: {startMode}}
+                : undefined;
+            win.loadFile('web/screensaver.html', loadOptions);
             win.webContents.once('did-finish-load', () => {
                 win.webContents.send('screenNumber', i);
             });
@@ -1174,7 +1415,8 @@ function createSSWindow(argv) {
     }
 }
 
-function createSSPWindow(argv) {
+function createSSPWindow(argv, options = {}) {
+    const startMode = options.startMode === "minimal" ? "minimal" : "normal";
     nq = true;
     allowedVideos = store.get("allowedVideos");
     previouslyPlayed = [];
@@ -1196,7 +1438,10 @@ function createSSPWindow(argv) {
         show: false
     });
     applyWindowsAppDetails(win);
-    win.loadFile('web/screensaver.html');
+    const loadOptions = startMode === "minimal"
+        ? {query: {startMode}}
+        : undefined;
+    win.loadFile('web/screensaver.html', loadOptions);
     win.webContents.once('did-finish-load', () => {
         win.webContents.send('screenNumber', 0);
     });
@@ -1473,6 +1718,18 @@ ipcMain.handle('getWindowState', (event) => {
     };
 });
 
+ipcMain.handle('getUpdateState', () => getUpdateStatePayload());
+
+ipcMain.on('startAppUpdate', () => {
+    startAppUpdateDownload().catch((error) => {
+        console.log("Error starting app update:", error?.message ?? error);
+    });
+});
+
+ipcMain.on('installAppUpdate', () => {
+    installDownloadedAppUpdate();
+});
+
 async function bootstrap() {
     await initializeStore();
     app.whenReady().then(startUp);
@@ -1517,6 +1774,7 @@ function startUp() {
     applyDefaultVideoProfileOnLaunch();
     calculateAstronomy();
     getWeatherData(false);
+    updateState = createDefaultUpdateState();
     checkForUpdate();
     setupGlobalShortcut();
     store.set('numDisplays', screen.getAllDisplays().length);
@@ -1748,7 +2006,8 @@ function setUpConfigFile() {
 
 //check for update on GitHub
 function checkForUpdate() {
-    store.set('updateAvailable', false);
+    updateState = createDefaultUpdateState();
+    broadcastRendererEvent("updateStateChanged", getUpdateStatePayload());
     const releaseUrl = `https://api.github.com/repos/${appRepo}/releases/latest`;
     const request = https.get(releaseUrl, {
         headers: {
@@ -1759,6 +2018,11 @@ function checkForUpdate() {
         if (response.statusCode !== 200) {
             response.resume();
             console.log(`Error checking for updates: GitHub releases API returned ${response.statusCode}.`);
+            setUpdateState({
+                status: "error",
+                error: `GitHub releases API returned ${response.statusCode}.`,
+                message: "Unable to check for updates right now."
+            });
             return;
         }
 
@@ -1770,31 +2034,131 @@ function checkForUpdate() {
         response.on("end", () => {
             try {
                 const release = JSON.parse(body);
-                const latestVersion = String(release.tag_name ?? release.name ?? "").replace(/^v/i, "").trim();
-                store.set("latestReleaseVersion", latestVersion || app.getVersion());
-                store.set("latestReleasePublishedAt", release.published_at ?? "");
-                store.set("latestReleaseNotes", String(release.body ?? "").trim());
-                store.set("latestReleaseUrl", release.html_url ?? appReleasesUrl);
-                store.set("latestReleaseName", release.name ?? release.tag_name ?? "");
+                const latestVersion = applyLatestReleaseMetadata({
+                    version: release.tag_name ?? release.name ?? "",
+                    publishedAt: release.published_at ?? "",
+                    notes: release.body ?? "",
+                    url: release.html_url ?? appReleasesUrl,
+                    name: release.name ?? release.tag_name ?? ""
+                });
                 if (latestVersion && compareSemver(latestVersion, app.getVersion()) > 0) {
-                    store.set('updateAvailable', latestVersion);
+                    setUpdateState({
+                        status: supportsInAppUpdates() ? "available" : "unsupported",
+                        availableVersion: latestVersion,
+                        releaseName: release.name ?? release.tag_name ?? "",
+                        releaseNotes: normalizeReleaseNotes(release.body ?? ""),
+                        releaseDate: release.published_at ?? "",
+                        releaseUrl: release.html_url ?? appReleasesUrl,
+                        progressPercent: 0,
+                        bytesPerSecond: 0,
+                        transferredBytes: 0,
+                        totalBytes: 0,
+                        error: "",
+                        message: supportsInAppUpdates()
+                            ? `Version ${latestVersion} is available to download in Aerial.`
+                            : getInAppUpdateUnavailableMessage()
+                    });
                     if (app.isPackaged) {
                         new Notification({
                             title: "An update for Aerial is available",
-                            body: `Version ${latestVersion} is available for download. Visit ${appReleasesUrl} to update Aerial.`
+                            body: supportsInAppUpdates()
+                                ? `Version ${latestVersion} is ready to download from Aerial's About page.`
+                                : `Version ${latestVersion} is available on the Aerial release page.`
                         }).show();
                     }
+                } else {
+                    setUpdateState({
+                        status: supportsInAppUpdates() ? "idle" : "unsupported",
+                        availableVersion: latestVersion,
+                        releaseName: release.name ?? release.tag_name ?? "",
+                        releaseNotes: normalizeReleaseNotes(release.body ?? ""),
+                        releaseDate: release.published_at ?? "",
+                        releaseUrl: release.html_url ?? appReleasesUrl,
+                        progressPercent: 0,
+                        bytesPerSecond: 0,
+                        transferredBytes: 0,
+                        totalBytes: 0,
+                        error: "",
+                        message: supportsInAppUpdates()
+                            ? "You're already on the latest version."
+                            : getInAppUpdateUnavailableMessage()
+                    });
                 }
-                broadcastRendererEvent("displaySettings");
             } catch (error) {
                 console.log("Error parsing update response:", error);
+                setUpdateState({
+                    status: "error",
+                    error: "Unable to parse the latest release information.",
+                    message: "Unable to parse the latest release information."
+                });
             }
         });
     });
 
     request.on("error", (error) => {
         console.log("Error checking for updates:", error?.message ?? error);
+        setUpdateState({
+            status: "error",
+            error: `Unable to check for updates: ${error?.message ?? error}`,
+            message: "Unable to check for updates right now."
+        });
     });
+}
+
+async function startAppUpdateDownload() {
+    if (!supportsInAppUpdates()) {
+        shell.openExternal(store.get("latestReleaseUrl") || appReleasesUrl);
+        return;
+    }
+    configureAutoUpdater();
+    if (updateDownloadPromise) {
+        return updateDownloadPromise;
+    }
+
+    let result;
+    try {
+        result = await autoUpdater.checkForUpdates();
+    } catch (error) {
+        const message = error?.message ?? String(error);
+        setUpdateState({
+            status: "error",
+            error: message,
+            message: "Unable to check for the installer update. Try again or open the release page."
+        });
+        throw error;
+    }
+    if (!result?.isUpdateAvailable) {
+        return null;
+    }
+
+    updateDownloadPromise = autoUpdater.downloadUpdate()
+        .catch((error) => {
+            const message = error?.message ?? String(error);
+            setUpdateState({
+                status: "error",
+                error: message,
+                message: "The update download failed. Try again or open the release page."
+            });
+            throw error;
+        })
+        .finally(() => {
+            updateDownloadPromise = null;
+        });
+
+    return updateDownloadPromise;
+}
+
+function installDownloadedAppUpdate() {
+    if (!supportsInAppUpdates()) {
+        shell.openExternal(store.get("latestReleaseUrl") || appReleasesUrl);
+        return;
+    }
+    configureAutoUpdater();
+    if (updateState.status !== "downloaded") {
+        return;
+    }
+    isAppQuitting = true;
+    autoUpdater.quitAndInstall(false, true);
 }
 
 //events from browser windows
@@ -2048,15 +2412,10 @@ ipcMain.on('openPreview', (event) => {
 
 ipcMain.on('openMinimalPreview', () => {
     if (screens.length === 0) {
-        createSSWindow(process.argv);
-        setTimeout(() => {
-            if (screens.length > 0) {
-                enterMinimalMode();
-            }
-        }, 1500);
+        createSSWindow(process.argv, {startMode: "minimal"});
         return;
     }
-    enterMinimalMode();
+    enterMinimalMode(true);
 });
 
 ipcMain.on('openInfoEditor', (event) => {
@@ -2573,13 +2932,13 @@ function onFirstVideoPlayed() {
     }
 }
 
-function enterMinimalMode() {
+function enterMinimalMode(immediate = false) {
     if (minimalModeCountdownInterval) {
         clearInterval(minimalModeCountdownInterval);
         minimalModeCountdownInterval = null;
     }
     for (let i = 0; i < screens.length; i++) {
-        screens[i].webContents.send('enterMinimalMode');
+        screens[i].webContents.send(immediate ? 'enterMinimalModeImmediate' : 'enterMinimalMode');
         if (store.get('sleepAfterMinimalMode')) {
             //sleep the computer after a few seconds of minimal mode
             setTimeout(() => {

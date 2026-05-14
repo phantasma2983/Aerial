@@ -24,6 +24,7 @@ let randomInterval = null;
 let minimalModeClockTimeout = null;
 let minimalModeMoveInterval = null;
 let minimalModeCurrentPosition = "";
+const startInMinimalMode = new URLSearchParams(window.location.search).get("startMode") === "minimal";
 const videoChangeState = {
     inProgress: false,
     queuedDirection: null,
@@ -1257,21 +1258,31 @@ function showMinimalMode() {
     }
 }
 
-function activateMinimalMode() {
+function clearVideoContainersForMinimalMode() {
+    containers.forEach((container) => {
+        container.pause();
+        container.removeAttribute("src");
+        container.load();
+        container.style.opacity = "0";
+    });
+}
+
+function activateMinimalMode(options = {}) {
+    const immediate = Boolean(options.immediate);
     if (blackScreen) {
         return;
     }
     blackScreen = true;
     stopStandardOverlayActivity();
+    if (immediate) {
+        clearVideoContainersForMinimalMode();
+        showMinimalMode();
+        return;
+    }
     fadeVideoOut(transitionLength);
     fadeTextOut(transitionLength);
     setTimeout(() => {
-        containers.forEach((container) => {
-            container.pause();
-            container.removeAttribute("src");
-            container.load();
-            container.style.opacity = "0";
-        });
+        clearVideoContainersForMinimalMode();
         showMinimalMode();
     }, transitionLength + 750);
 }
@@ -1576,14 +1587,21 @@ document.addEventListener("visibilitychange", () => {
     }
 });
 
-//play a video
-newVideo();
+//play a video unless the window was launched directly into minimal mode
+if (startInMinimalMode) {
+    activateMinimalMode({immediate: true});
+} else {
+    newVideo();
+}
 
 electron.ipcRenderer.on('newVideo', (_event, direction) => {
     newVideo(direction === "previous" ? "previous" : "next");
 });
 
 electron.ipcRenderer.on('enterMinimalMode', activateMinimalMode);
+electron.ipcRenderer.on('enterMinimalModeImmediate', () => {
+    activateMinimalMode({immediate: true});
+});
 electron.ipcRenderer.on('blankTheScreen', () => {
     activateMinimalMode();
 });

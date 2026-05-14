@@ -129,12 +129,52 @@ a:hover {
 }
 
 .appTabBar {
-    background: transparent;
+    background: linear-gradient(180deg, rgba(20, 30, 50, 0.86), rgba(16, 25, 43, 0.78));
     border-top: 1px solid var(--line);
-    padding: 8px 8px 9px;
+    padding: 0 16px;
+    display: flex;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 12px;
+    flex-wrap: wrap;
+    min-height: 56px;
+    width: 100%;
+}
+
+body[data-theme="light"] .appTopBar {
+    background: rgba(251, 252, 253, 0.98);
+    box-shadow: 0 10px 24px rgba(37, 60, 98, 0.08);
+}
+
+body[data-theme="light"] .appTabBar {
+    background: linear-gradient(180deg, rgba(251, 252, 253, 0.98), rgba(244, 247, 251, 0.96));
+    border-top-color: rgba(79, 108, 148, 0.18);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
+.appTabBar::before,
+.appTabBar::after {
+    content: none !important;
+    display: none !important;
+}
+
+.appTabGroup {
     display: flex;
     align-items: center;
     gap: 8px;
+    flex-wrap: wrap;
+}
+
+.appTabGroupPrimary {
+    align-self: stretch;
+    gap: 0;
+    margin-left: -16px;
+}
+
+.appTabGroupActions {
+    margin-left: auto;
+    padding: 8px 0;
+    gap: 10px;
 }
 
 .windowActions {
@@ -178,10 +218,6 @@ a:hover {
     color: #ffffff !important;
 }
 
-.appTabBar .w3-right {
-    margin-left: auto;
-}
-
 .appContent {
     position: relative;
     top: var(--chrome-height);
@@ -220,6 +256,10 @@ a:hover {
     border-radius: var(--radius-sm);
     margin: 2px 8px;
     transition: background-color var(--speed) ease, color var(--speed) ease, transform var(--speed) ease;
+}
+
+.appTabBar .w3-bar-item.w3-button {
+    margin: 0 !important;
 }
 
 .w3-sidebar .w3-bar-item.w3-button {
@@ -382,6 +422,23 @@ a:hover {
     display: inline-block !important;
 }
 
+.locationActionRow {
+    row-gap: 6px;
+}
+
+.locationStatusMessage {
+    margin: 0 !important;
+    color: var(--text-muted);
+}
+
+.locationStatusMessage.is-error {
+    color: var(--danger);
+}
+
+.locationStatusMessage.is-success {
+    color: var(--success);
+}
+
 .settingSplitRow {
     display: flex;
     align-items: center;
@@ -430,7 +487,7 @@ a:hover {
 #textCard .w3-display-container {
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+    border-radius: var(--radius-sm);
 }
 
 #videoCard {
@@ -553,6 +610,54 @@ button,
 
 .tablink {
     min-height: 40px;
+}
+
+.navTab {
+    min-height: 56px;
+    padding: 0 22px !important;
+    border: 0 !important;
+    border-right: 1px solid var(--line) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    font-family: var(--font-title);
+    font-size: 1rem;
+    letter-spacing: 0.2px;
+    box-shadow: none !important;
+    position: relative;
+}
+
+.navTab:hover {
+    background: rgba(44, 195, 179, 0.08) !important;
+    color: var(--text) !important;
+    transform: none !important;
+    box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+.navTab.w3-blue {
+    background: linear-gradient(180deg, rgba(44, 195, 179, 0.18), rgba(44, 195, 179, 0.06)) !important;
+    color: #ffffff !important;
+    box-shadow: inset 0 -3px 0 var(--accent), inset 0 1px 0 rgba(255, 255, 255, 0.08) !important;
+}
+
+body[data-theme="light"] .navTab {
+    color: #4f6380 !important;
+}
+
+body[data-theme="light"] .navTab:hover {
+    background: rgba(15, 164, 150, 0.08) !important;
+    box-shadow: inset 0 -1px 0 rgba(79, 108, 148, 0.14) !important;
+}
+
+body[data-theme="light"] .navTab.w3-blue {
+    background: linear-gradient(180deg, rgba(15, 164, 150, 0.16), rgba(15, 164, 150, 0.05)) !important;
+    color: var(--text) !important;
+    box-shadow: inset 0 -3px 0 var(--accent), inset 0 1px 0 rgba(255, 255, 255, 0.55) !important;
+}
+
+.toolbarAction {
+    min-height: 40px;
+    padding: 0 18px !important;
 }
 
 .w3-button.w3-small {
@@ -696,13 +801,40 @@ textarea {
     transition: border-color var(--speed) ease, box-shadow var(--speed) ease, background-color var(--speed) ease;
 }
 
+select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    padding-right: 40px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.25 4.5L6 8.25L9.75 4.5' fill='none' stroke='%23d9e8ff' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-size: 12px 12px;
+    background-position: right 14px center;
+}
+
+select::-ms-expand {
+    display: none;
+}
+
+#videoTab .w3-select {
+    padding: 8px 40px 8px 10px;
+}
+
 body[data-theme="light"] .w3-input,
 body[data-theme="light"] input[type="text"],
 body[data-theme="light"] input[type="number"],
 body[data-theme="light"] input[type="time"],
 body[data-theme="light"] select,
 body[data-theme="light"] textarea {
-    background: #ffffff;
+    background-color: #ffffff;
+}
+
+body[data-theme="light"] select {
+    background-color: #ffffff;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M2.25 4.5L6 8.25L9.75 4.5' fill='none' stroke='%23586e90' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-size: 12px 12px;
+    background-position: right 14px center;
 }
 
 .w3-input:focus,
@@ -1257,6 +1389,81 @@ input[type="radio"] {
     font-family: Consolas, "Courier New", monospace;
     font-size: 0.9rem;
     line-height: 1.45;
+}
+
+.updatePanel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.updatePanelHeader {
+    align-items: start;
+}
+
+.updatePanelHeader h4 {
+    margin: 0;
+}
+
+.updatePanelMessage {
+    margin: 6px 0 0;
+}
+
+.updateActionRow {
+    justify-content: flex-end;
+}
+
+.updateProgress {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.updateProgressTrack {
+    width: 100%;
+    height: 12px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    overflow: hidden;
+}
+
+.updateProgressBar {
+    width: 0;
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+    transition: width var(--speed) ease;
+}
+
+.updateProgressMeta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.updatePanelFooter {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.updateVersionBadge {
+    color: var(--text-muted);
+}
+
+.updateStatusText {
+    color: var(--text-muted);
+}
+
+.updateStatusText.is-error {
+    color: var(--danger);
+}
+
+.updateStatusText.is-success {
+    color: var(--success);
 }
 
 * {

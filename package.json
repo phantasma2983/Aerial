@@ -1,61 +1,69 @@
 {
-  "name": "aerial",
-  "version": "1.3.11",
-  "videoJSONVersion": "1.15.0",
-  "description": "Apple TV screen saver for Windows",
-  "main": "app.js",
-  "scripts": {
-    "start": "electron .",
-    "dist": "electron-builder",
-    "build": "electron-builder build && node scripts/create-scr-artifact.js",
-    "lint": "node scripts/run-syntax-lint.js",
-    "lint:targets": "node scripts/run-syntax-lint.js --list"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/phantasma2983/Aerial.git"
-  },
-  "author": "phantasma2983 (fork of OrangeJedi/Aerial)",
-  "license": "MIT",
-  "bugs": {
-    "url": "https://github.com/phantasma2983/Aerial/issues"
-  },
-  "homepage": "https://github.com/phantasma2983/Aerial#readme",
-  "devDependencies": {
-    "electron": "^40.6.1",
-    "electron-builder": "^26.8.1"
-  },
-  "dependencies": {
-    "auto-launch": "~5.0.6",
-    "electron-store": "~11.0.2",
-    "font-list-universal": "~1.0.0",
-    "json-beautify": "~1.1.1",
-    "suncalc": "~1.9.0"
-  },
-  "build": {
-    "appId": "com.phantasma2983.aerial",
-    "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ]
+    "name": "aerial",
+    "version": "1.3.13",
+    "videoJSONVersion": "1.15.0",
+    "description": "Apple TV screen saver for Windows",
+    "main": "app.js",
+    "scripts": {
+        "start": "electron .",
+        "dist": "electron-builder",
+        "build": "electron-builder build && node scripts/create-scr-artifact.js",
+        "lint": "node scripts/run-syntax-lint.js",
+        "lint:targets": "node scripts/run-syntax-lint.js --list"
     },
-    "nsis": {
-      "installerIcon": "icon.ico",
-      "guid": "17c6ea6b-270a-5297-8e23-9bcda4a29a48",
-      "perMachine": false
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/phantasma2983/Aerial.git"
     },
-    "portable": {
-      "artifactName": "aerial.exe",
-      "useZip": true
+    "author": "phantasma2983 (fork of OrangeJedi/Aerial)",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/phantasma2983/Aerial/issues"
     },
-    "files": [
-      "!assets/images/**"
-    ],
-    "icon": "icon.ico",
-    "productName": "Aerial"
-  },
-  "overrides": {
-    "semver": "7.7.4"
-  }
+    "homepage": "https://github.com/phantasma2983/Aerial#readme",
+    "devDependencies": {
+        "electron": "^40.6.1",
+        "electron-builder": "^26.8.1"
+    },
+    "dependencies": {
+        "auto-launch": "~5.0.6",
+        "electron-store": "~11.0.2",
+        "electron-updater": "^6.8.3",
+        "font-list-universal": "~1.0.0",
+        "json-beautify": "~1.1.1",
+        "suncalc": "~1.9.0"
+    },
+    "build": {
+        "appId": "com.phantasma2983.aerial",
+        "win": {
+            "target": [
+                "nsis",
+                "portable"
+            ]
+        },
+        "nsis": {
+            "installerIcon": "icon.ico",
+            "guid": "17c6ea6b-270a-5297-8e23-9bcda4a29a48",
+            "perMachine": false
+        },
+        "portable": {
+            "artifactName": "aerial.exe",
+            "useZip": true
+        },
+        "files": [
+            "!assets/images/**"
+        ],
+        "publish": [
+            {
+                "provider": "github",
+                "owner": "phantasma2983",
+                "repo": "Aerial"
+            }
+        ],
+        "icon": "icon.ico",
+        "productName": "Aerial"
+    },
+    "overrides": {
+        "semver": "7.7.4"
+    }
 }

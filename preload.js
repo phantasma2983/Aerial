@@ -15,19 +15,19 @@ function storeSetSync(key, value) {
 contextBridge.exposeInMainWorld("electron", {
     ipcRenderer: {
         send: (channel, data) => {
-            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "openMinimalPreview", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "consoleLog", "windowControl"];
+            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "openMinimalPreview", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "consoleLog", "windowControl", "startAppUpdate", "installAppUpdate"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.send(channel, data);
             }
         },
         on: (channel, func) => {
-            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "enterMinimalMode", "showWelcome", "updateAttribute", "screenNumber", "windowStateChanged"];
+            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "enterMinimalMode", "enterMinimalModeImmediate", "showWelcome", "updateAttribute", "screenNumber", "windowStateChanged", "updateStateChanged"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.on(channel, (event, ...args) => func(...args));
             }
         },
         invoke: (channel, args) => {
-            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "getWeatherData", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics", "getWindowState"];
+            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "getWeatherData", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics", "getWindowState", "getUpdateState"];
             if (validChannels.includes(channel)) {
                 return ipcRenderer.invoke(channel, args);
             }

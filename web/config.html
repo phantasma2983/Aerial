@@ -37,11 +37,15 @@
         </div>
     </div>
     <div class="w3-bar appTabBar">
-        <button class="w3-bar-item w3-button tablink w3-blue" onclick="changeTab(event,'settingsTab')">Settings</button>
-        <button class="w3-bar-item w3-button tablink" onclick="changeTab(event,'videoTab')">Videos</button>
-        <button class="w3-bar-item w3-button tablink" onclick="changeTab(event,'textTab')">Text</button>
-        <button class="w3-bar-item w3-button tablink w3-right" onclick="openPreview()">Preview</button>
-        <button class="w3-bar-item w3-button tablink w3-right" onclick="openMinimalPreview()">Test Minimal Mode</button>
+        <div class="appTabGroup appTabGroupPrimary">
+            <button class="w3-bar-item w3-button tablink navTab w3-blue" onclick="changeTab(event,'settingsTab')">Settings</button>
+            <button class="w3-bar-item w3-button tablink navTab" onclick="changeTab(event,'videoTab')">Videos</button>
+            <button class="w3-bar-item w3-button tablink navTab" onclick="changeTab(event,'textTab')">Text</button>
+        </div>
+        <div class="appTabGroup appTabGroupActions">
+            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openPreview()">Preview Aerial</button>
+            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openMinimalPreview()">Preview Minimal Mode</button>
+        </div>
     </div>
 </div>
 <div class="appContent">
@@ -120,7 +124,7 @@
                                 </div>
                             </div>
                             <div class="formRow">
-                                <label class="formLabel">Preview</label>
+                                <label class="formLabel">Example</label>
                                 <div class="formControl">
                                     <span id="minimalTimeFormatPreview" class="positionPreviewValue"></span>
                                 </div>
@@ -359,6 +363,14 @@
                         <input class="w3-input inlineCoordinateInput" type="number" id="longitude"
                                onchange="updateSetting('longitude','number'); updateLocation()">
                         <span>E</span>
+                    </div>
+                    <div class="settingInlineRow settingInlineIndentedRow locationActionRow">
+                        <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                type="button"
+                                onclick="requestCurrentLocation()">
+                            Use Current Location
+                        </button>
+                        <span id="currentLocationStatus" class="w3-small settingHint locationStatusMessage"></span>
                     </div>
                 </div>
             </div>
@@ -668,11 +680,35 @@
                         <div><span class="infoLabel">Published</span><span class="infoValue" id="latestReleasePublishedAt"></span></div>
                     </div>
                     <div id="aboutUpdate" style="display: none">
-                        <div class="w3-panel w3-pale-green" style="padding-bottom: 2%">
-                            <h4>A new version of Aerial is available!</h4>
-                            <a id="releaseLink" href="https://github.com/phantasma2983/Aerial/releases" target="_blank">Click here</a>
-                            to
-                            download version v<span id="updateAvailable"></span>
+                        <div class="infoPanel updatePanel">
+                            <div class="settingSplitRow updatePanelHeader">
+                                <div>
+                                    <h4 id="updatePanelTitle">Update Status</h4>
+                                    <p id="updatePanelMessage" class="w3-small updatePanelMessage"></p>
+                                </div>
+                                <div class="settingActionRow updateActionRow">
+                                    <button id="appUpdateActionButton" class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                            type="button"
+                                            onclick="handleAppUpdateAction()">
+                                        Download and Install Update
+                                    </button>
+                                    <a id="releaseLink" class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                       href="https://github.com/phantasma2983/Aerial/releases" target="_blank">Open Release Page</a>
+                                </div>
+                            </div>
+                            <div id="appUpdateProgress" class="updateProgress" style="display: none">
+                                <div class="updateProgressTrack">
+                                    <div id="appUpdateProgressBar" class="updateProgressBar"></div>
+                                </div>
+                                <div class="updateProgressMeta">
+                                    <span id="appUpdateProgressValue">0%</span>
+                                    <span id="appUpdateProgressDetail" class="w3-small"></span>
+                                </div>
+                            </div>
+                            <div class="updatePanelFooter">
+                                <span id="updateAvailable" class="w3-small updateVersionBadge"></span>
+                                <span id="appUpdateStatus" class="w3-small updateStatusText"></span>
+                            </div>
                         </div>
                     </div>
                     <div class="aboutPanelBlock">

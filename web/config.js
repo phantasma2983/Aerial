@@ -2,7 +2,11 @@
 //This list of allowed or 'checked' videos
 const bundledVideos = electron.bundledVideos ?? electron.videos;
 const {getVideoSource, sanitizeExtraVideo} = electron.videoUtils;
-const {FONT_SIZE_UNITS, normalizeOpacity, normalizeFontSizeUnit} = electron.textUtils;
+const {
+    FONT_SIZE_UNITS,
+    normalizeOpacity,
+    normalizeFontSizeUnit
+} = electron.textUtils;
 let videos = electron.store.get("videoCatalog") ?? electron.videos;
 let allowedVideos = electron.store.get("allowedVideos");
 let downloadedVideos = electron.store.get("downloadedVideos");
@@ -26,6 +30,9 @@ let latestCacheDiagnostics = null;
 let cacheDiagnosticsRefreshToken = 0;
 let latestLogDiagnostics = null;
 let pendingProfileSelectionId = "";
+let currentLocationRequestInFlight = false;
+let latestUpdateState = null;
+let hasRequestedUpdateState = false;
 refreshVideoCatalog();
 
 const CUSTOM_FORMAT_SENTINEL = "__custom__";
@@ -105,7 +112,7 @@ function displaySettings() {
     for (let i = 0; i < numeralText.length; i++) {
         $(`#${numeralText[i].id}`).text(numeral(electron.store.get(numeralText[i].id)).format(numeralText[i].format));
     }
-    let staticText = ["version", "updateAvailable"];
+    let staticText = ["version"];
     for (let i = 0; i < staticText.length; i++) {
         $(`#${staticText[i]}`).text(electron.store.get(staticText[i]));
     }
@@ -121,20 +128,12 @@ function displaySettings() {
     updateSettingVisibility();
     showMinimalModeTimePreview();
     renderAboutPanel();
+    ensureUpdateStateLoaded();
     refreshCacheDiagnostics();
     refreshLogDiagnostics();
     makeList();
     selectVideo(selectedVideoIndex >= 0 ? selectedVideoIndex : -1);
-
-    //display update, if there is one
-    //console.log(electron.store.get('updateAvailable'));
-    if (electron.store.get('updateAvailable') !== false) {
-        document.getElementById(`aboutUpdate`).style.display = "";
-        document.getElementById(`updateBadge`).style.display = "";
-    }
 }
-
-displaySettings();
 
 function applyTheme(theme) {
     const normalized = theme === "light" ? "light" : "dark";
@@ -188,6 +187,11 @@ function closeConfigWindow() {
 
 electron.ipcRenderer.on("windowStateChanged", (windowState) => {
     updateWindowControlState(windowState);
+});
+
+electron.ipcRenderer.on("updateStateChanged", (state) => {
+    latestUpdateState = state;
+    renderAboutPanel();
 });
 
 const topHeader = document.querySelector(".topHeader");
@@ -260,6 +264,46 @@ function summarizeReleaseNotes(notes) {
     return lines.slice(0, 8).join("\n");
 }
 
+function formatUpdateProgressDetail(state) {
+    const transferred = Number(state?.transferredBytes ?? 0);
+    const total = Number(state?.totalBytes ?? 0);
+    const rate = Number(state?.bytesPerSecond ?? 0);
+    const parts = [];
+    if (total > 0) {
+        parts.push(`${numeral(transferred).format("0.00 ib")} / ${numeral(total).format("0.00 ib")}`);
+    }
+    if (rate > 0) {
+        parts.push(`${numeral(rate).format("0.00 ib")}/s`);
+    }
+    return parts.join(" | ");
+}
+
+function ensureUpdateStateLoaded() {
+    if (hasRequestedUpdateState) {
+        return;
+    }
+    hasRequestedUpdateState = true;
+    refreshUpdateState();
+}
+
+async function refreshUpdateState() {
+    try {
+        latestUpdateState = await electron.ipcRenderer.invoke("getUpdateState");
+        renderAboutPanel();
+    } catch {
+        hasRequestedUpdateState = false;
+    }
+}
+
+function handleAppUpdateAction() {
+    const status = latestUpdateState?.status;
+    if (status === "downloaded") {
+        electron.ipcRenderer.send("installAppUpdate");
+        return;
+    }
+    electron.ipcRenderer.send("startAppUpdate");
+}
+
 function renderAboutPanel() {
     const installedVersion = electron.store.get("version") ?? "Unknown";
     const latestVersion = electron.store.get("latestReleaseVersion") ?? installedVersion;
@@ -284,6 +328,91 @@ function renderAboutPanel() {
     }
     if (diagnosticsStatus) {
         diagnosticsStatus.textContent = "";
+    }
+
+    const aboutUpdate = document.getElementById("aboutUpdate");
+    const updateBadge = document.getElementById("updateBadge");
+    const updatePanelTitle = document.getElementById("updatePanelTitle");
+    const updatePanelMessage = document.getElementById("updatePanelMessage");
+    const updateActionButton = document.getElementById("appUpdateActionButton");
+    const updateStatus = document.getElementById("appUpdateStatus");
+    const updateProgress = document.getElementById("appUpdateProgress");
+    const updateProgressBar = document.getElementById("appUpdateProgressBar");
+    const updateProgressValue = document.getElementById("appUpdateProgressValue");
+    const updateProgressDetail = document.getElementById("appUpdateProgressDetail");
+    const updateVersionBadge = document.getElementById("updateAvailable");
+    const hasUpdate = electron.store.get("updateAvailable") !== false;
+    const state = latestUpdateState ?? {
+        supported: false,
+        status: hasUpdate ? "available" : "idle",
+        availableVersion: latestVersion,
+        message: hasUpdate ? `Version ${latestVersion} is available.` : "You're already on the latest version.",
+        progressPercent: 0,
+        transferredBytes: 0,
+        totalBytes: 0,
+        bytesPerSecond: 0,
+        error: ""
+    };
+    const progressPercent = Math.max(0, Math.min(100, Number(state.progressPercent ?? 0)));
+    const statusTone = state.status === "downloaded"
+        ? "success"
+        : (state.status === "error" ? "error" : "");
+
+    if (aboutUpdate) {
+        aboutUpdate.style.display = "";
+    }
+    if (updateBadge) {
+        updateBadge.style.display = hasUpdate ? "" : "none";
+    }
+    if (updatePanelTitle) {
+        if (state.status === "downloaded") {
+            updatePanelTitle.textContent = "Update Ready";
+        } else if (hasUpdate) {
+            updatePanelTitle.textContent = "Update Available";
+        } else {
+            updatePanelTitle.textContent = "Update Status";
+        }
+    }
+    if (updatePanelMessage) {
+        updatePanelMessage.textContent = state.message || (hasUpdate ? `Version ${latestVersion} is available.` : "You're already on the latest version.");
+    }
+    if (updateVersionBadge) {
+        updateVersionBadge.textContent = hasUpdate ? `Latest version: v${state.availableVersion || latestVersion}` : `Installed version: v${installedVersion}`;
+    }
+    if (updateStatus) {
+        updateStatus.textContent = state.error || "";
+        updateStatus.classList.remove("is-error", "is-success");
+        if (statusTone === "error") {
+            updateStatus.classList.add("is-error");
+        } else if (statusTone === "success") {
+            updateStatus.classList.add("is-success");
+        }
+    }
+    if (updateProgress) {
+        updateProgress.style.display = state.status === "downloading" || state.status === "downloaded" ? "" : "none";
+    }
+    if (updateProgressBar) {
+        updateProgressBar.style.width = `${progressPercent}%`;
+    }
+    if (updateProgressValue) {
+        updateProgressValue.textContent = `${Math.round(progressPercent)}%`;
+    }
+    if (updateProgressDetail) {
+        updateProgressDetail.textContent = formatUpdateProgressDetail(state);
+    }
+    if (updateActionButton) {
+        updateActionButton.style.display = hasUpdate ? "" : "none";
+        updateActionButton.disabled = state.status === "checking" || state.status === "downloading";
+        if (state.status === "downloading") {
+            updateActionButton.textContent = "Downloading Update...";
+        } else if (state.status === "downloaded") {
+            updateActionButton.textContent = "Restart and Install";
+        } else if (!state.supported) {
+            updateActionButton.textContent = "Open Release Page";
+            updateActionButton.style.display = "none";
+        } else {
+            updateActionButton.textContent = "Download and Install Update";
+        }
     }
 }
 
@@ -864,6 +993,77 @@ function updateLocation() {
             electron.ipcRenderer.send('updateLocation');
         }, 200);
     }
+}
+
+function setCurrentLocationStatus(message, tone = "") {
+    const status = document.getElementById("currentLocationStatus");
+    if (!status) {
+        return;
+    }
+    status.textContent = message ?? "";
+    status.classList.remove("is-error", "is-success");
+    if (tone === "error") {
+        status.classList.add("is-error");
+    } else if (tone === "success") {
+        status.classList.add("is-success");
+    }
+}
+
+function requestCurrentLocation() {
+    if (currentLocationRequestInFlight) {
+        return;
+    }
+    if (!navigator.geolocation) {
+        setCurrentLocationStatus("Current location is not available here. Please set it manually.", "error");
+        return;
+    }
+
+    currentLocationRequestInFlight = true;
+    setCurrentLocationStatus("Trying to get your current location...");
+    navigator.geolocation.getCurrentPosition((position) => {
+        currentLocationRequestInFlight = false;
+        const latitude = Number(position?.coords?.latitude);
+        const longitude = Number(position?.coords?.longitude);
+        if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+            setCurrentLocationStatus("Couldn't get a valid location. Please set it manually.", "error");
+            return;
+        }
+        const latitudeValue = latitude.toFixed(6);
+        const longitudeValue = longitude.toFixed(6);
+        const latitudeInput = document.getElementById("latitude");
+        const longitudeInput = document.getElementById("longitude");
+        if (latitudeInput) {
+            latitudeInput.value = latitudeValue;
+        }
+        if (longitudeInput) {
+            longitudeInput.value = longitudeValue;
+        }
+        electron.store.set("latitude", latitudeValue);
+        electron.store.set("longitude", longitudeValue);
+        if (electron.store.get("useLocationForSunrise")) {
+            updateLocation();
+            setCurrentLocationStatus("Location updated from Windows.", "success");
+        } else {
+            setCurrentLocationStatus("Location filled in. Enable location-based sunrise/sunset if you want it applied automatically.", "success");
+        }
+    }, (error) => {
+        currentLocationRequestInFlight = false;
+        switch (error?.code) {
+            case 1:
+                setCurrentLocationStatus("Location access was denied. Please set it manually.", "error");
+                break;
+            case 3:
+                setCurrentLocationStatus("Timed out while trying to get your location. Please set it manually.", "error");
+                break;
+            default:
+                setCurrentLocationStatus("Couldn't get your current location. Please set it manually.", "error");
+                break;
+        }
+    }, {
+        enableHighAccuracy: false,
+        timeout: 10000,
+        maximumAge: 300000
+    });
 }
 
 //Cache functions
@@ -1846,30 +2046,6 @@ function toggleVideoQuickFilter(filterKey) {
 
 const minimalModeLocalePreviewFormatter = new Intl.DateTimeFormat(undefined, {timeStyle: "short"});
 
-function getMinimalModePreviewStyle() {
-    const useDefaultFont = electron.store.get("minimalModeDefaultFont") ?? true;
-    return {
-        fontFamily: useDefaultFont
-            ? (electron.store.get("textFont") ?? "Segoe UI")
-            : (electron.store.get("minimalModeFont") || electron.store.get("textFont") || "Segoe UI"),
-        fontSize: getFontSizeCssValue(
-            useDefaultFont ? electron.store.get("textSize") : electron.store.get("minimalModeFontSize"),
-            useDefaultFont ? electron.store.get("textSizeUnit") : electron.store.get("minimalModeFontSizeUnit"),
-            normalizeFontSizeValue(electron.store.get("textSize"), 2),
-            normalizeTextSizeUnit(electron.store.get("textSizeUnit"))
-        ),
-        color: useDefaultFont
-            ? (electron.store.get("textColor") ?? "#FFFFFF")
-            : (electron.store.get("minimalModeFontColor") || electron.store.get("textColor") || "#FFFFFF"),
-        fontWeight: useDefaultFont
-            ? (electron.store.get("textFontWeight") ?? "400")
-            : (electron.store.get("minimalModeFontWeight") || electron.store.get("textFontWeight") || "400"),
-        opacity: useDefaultFont
-            ? normalizeOpacity(electron.store.get("textOpacity"), 1)
-            : normalizeOpacity(electron.store.get("minimalModeOpacity"), normalizeOpacity(electron.store.get("textOpacity"), 1))
-    };
-}
-
 function showMinimalModeTimePreview() {
     const input = document.getElementById("minimalTimeFormat");
     const preview = document.getElementById("minimalTimeFormatPreview");
@@ -1881,12 +2057,6 @@ function showMinimalModeTimePreview() {
     preview.textContent = format
         ? moment().format(format)
         : minimalModeLocalePreviewFormatter.format(new Date());
-    const style = getMinimalModePreviewStyle();
-    preview.style.fontFamily = `"${style.fontFamily}"`;
-    preview.style.fontSize = style.fontSize;
-    preview.style.color = `${style.color}`;
-    preview.style.fontWeight = `${style.fontWeight}`;
-    preview.style.opacity = `${style.opacity}`;
 }
 
 function toggleVideoFilterPanel() {
@@ -2502,3 +2672,6 @@ function openMinimalPreview() {
 function newGlobalShortcut() {
     electron.ipcRenderer.send('newGlobalShortcut');
 }
+
+// Run the initial render after the full module has initialized its const helpers.
+displaySettings();
