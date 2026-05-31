@@ -2,5 +2,8 @@
 node_modules
 aerial-win32-x64
 dist
+build/media-helper
+native/**/bin
+native/**/obj
 test.js
 AGENTS.md

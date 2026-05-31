@@ -1,7 +1,42 @@
 const videos = electron.videos;
-const allowedVideos = electron.store.get("allowedVideos");
-let downloadedVideos = electron.store.get("downloadedVideos");
-let customVideos = electron.store.get("customVideos");
+const urlSearchParams = new URLSearchParams(window.location.search);
+const rendererMode = urlSearchParams.get("mode") ?? "screensaver";
+const isWallpaperMode = rendererMode === "wallpaper";
+const resumePlaybackState = {
+    videoId: urlSearchParams.get("resumeVideoId") ?? "",
+    currentTime: Math.max(0, Number(urlSearchParams.get("resumeTime")) || 0)
+};
+const MODE_SCOPED_SETTING_KEYS = new Set([
+    "allowedVideos",
+    "displayText",
+    "playbackSpeed",
+    "videoFilters",
+    "textFont",
+    "textSize",
+    "textSizeUnit",
+    "textColor",
+    "textLineHeight",
+    "textFontWeight",
+    "textOpacity",
+    "textFadeInDuration",
+    "textFadeOutDuration",
+    "randomSpeed"
+]);
+
+function modeScopedSettingKey(key) {
+    if (!isWallpaperMode || !MODE_SCOPED_SETTING_KEYS.has(key)) {
+        return key;
+    }
+    return `wallpaper${key.charAt(0).toUpperCase()}${key.slice(1)}`;
+}
+
+function modeStoreGet(key) {
+    return electron.store.get(modeScopedSettingKey(key));
+}
+
+const allowedVideos = modeStoreGet("allowedVideos");
+let downloadedVideos = modeStoreGet("downloadedVideos");
+let customVideos = modeStoreGet("customVideos");
 const {getVideoSource} = electron.videoUtils;
 const {
     normalizeOpacity,
@@ -24,7 +59,7 @@ let randomInterval = null;
 let minimalModeClockTimeout = null;
 let minimalModeMoveInterval = null;
 let minimalModeCurrentPosition = "";
-const startInMinimalMode = new URLSearchParams(window.location.search).get("startMode") === "minimal";
+const startInMinimalMode = urlSearchParams.get("startMode") === "minimal";
 const videoChangeState = {
     inProgress: false,
     queuedDirection: null,
@@ -36,7 +71,16 @@ let textVisibilitySignaled = false;
 let initialTextFadeStarted = false;
 let initialTextFadeFallbackTimeout = null;
 const opacityAnimationState = new WeakMap();
-const debugPlayback = electron.store.get("debugPlayback") ?? false;
+let wallpaperPlaybackStateInterval = null;
+let wallpaperSpeedEaseInterval = null;
+let wallpaperFullscreenActive = false;
+let wallpaperCurrentPlaybackRate = Number(modeStoreGet('playbackSpeed')) || 1;
+let wallpaperPauseTimeout = null;
+let wallpaperPlaybackSmoothingActive = false;
+const WALLPAPER_SLOWDOWN_TICK_MS = 100;
+const WALLPAPER_PAUSE_AFTER_MS = 1000;
+const WALLPAPER_PAUSE_RATE_FLOOR = 0.35;
+const debugPlayback = modeStoreGet("debugPlayback") ?? false;
 const playbackMetrics = {
     transitionRequests: 0,
     transitionQueued: 0,
@@ -70,8 +114,56 @@ function once(callback) {
     };
 }
 
+function getConfiguredPlaybackSpeed() {
+    return Math.max(0.05, Number(modeStoreGet('playbackSpeed')) || 1);
+}
+
+function applyPlaybackRate(rate) {
+    const safeRate = Math.max(0.05, Number(rate) || 0.05);
+    for (const container of containers) {
+        container.playbackRate = safeRate;
+    }
+}
+
+function setWallpaperPlaybackSmoothing(active) {
+    if (!isWallpaperMode) {
+        return;
+    }
+    if (wallpaperPlaybackSmoothingActive === active) {
+        return;
+    }
+    wallpaperPlaybackSmoothingActive = active;
+    for (const container of containers) {
+        container.classList.toggle("wallpaperPlaybackSmoothing", active);
+    }
+}
+
+function clearWallpaperPauseTimeout() {
+    if (!wallpaperPauseTimeout) {
+        return;
+    }
+    clearTimeout(wallpaperPauseTimeout);
+    wallpaperPauseTimeout = null;
+}
+
+function pauseWallpaperAfterSlowdown() {
+    if (wallpaperPauseTimeout) {
+        return;
+    }
+    wallpaperPauseTimeout = setTimeout(() => {
+        wallpaperPauseTimeout = null;
+        if (!wallpaperFullscreenActive) {
+            return;
+        }
+        wallpaperCurrentPlaybackRate = 0;
+        for (const container of containers) {
+            container.pause();
+        }
+    }, WALLPAPER_PAUSE_AFTER_MS);
+}
+
 function getTextTransitionDurationMs(setting, fallbackMs) {
-    const parsed = Number(electron.store.get(setting));
+    const parsed = Number(modeStoreGet(setting));
     if (!Number.isFinite(parsed)) {
         return fallbackMs;
     }
@@ -80,14 +172,14 @@ function getTextTransitionDurationMs(setting, fallbackMs) {
 
 const textFadeInDuration = getTextTransitionDurationMs("textFadeInDuration", 650);
 const textFadeOutDuration = getTextTransitionDurationMs("textFadeOutDuration", 260);
-const globalDefaultTextOpacity = normalizeOpacity(electron.store.get("textOpacity"), 1);
+const globalDefaultTextOpacity = normalizeOpacity(modeStoreGet("textOpacity"), 1);
 const WEATHER_RENDER_CHECK_MS = 5 * 60 * 1000;
 const MINIMAL_MODE_MOVE_MS = 15 * 1000;
 const WEATHER_ICON_BASE_PATH = "../assets/weather-icons/lucide";
 const minimalModeTimeFormatter = new Intl.DateTimeFormat(undefined, {timeStyle: "short"});
 let weatherDisplayTimeout = null;
 let weatherDisplayRequest = null;
-let latestWeatherData = electron.store.get("weatherData") ?? null;
+let latestWeatherData = modeStoreGet("weatherData") ?? null;
 const minimalModeOverlay = document.getElementById("minimalModeOverlay");
 
 function clearWeatherDisplayRefresh() {
@@ -261,23 +353,31 @@ function trackFrameDelta(deltaMs) {
 }
 
 function quitApp() {
+    if (isWallpaperMode) {
+        return;
+    }
     electron.ipcRenderer.send('quitApp');
 }
 
 //quit when a key is pressed
 document.addEventListener('keydown', (e) => {
+    if (isWallpaperMode) {
+        return;
+    }
     electron.ipcRenderer.send('keyPress', e.code);
 });
-document.addEventListener('mousedown', quitApp);
-setTimeout(function () {
-    var threshold = 5;
-    document.addEventListener('mousemove', function (e) {
-        if (threshold * threshold < e.movementX * e.movementX
-            + e.movementY * e.movementY) {
-            quitApp();
-        }
-    });
-}, 1500);
+if (!isWallpaperMode) {
+    document.addEventListener('mousedown', quitApp);
+    setTimeout(function () {
+        var threshold = 5;
+        document.addEventListener('mousemove', function (e) {
+            if (threshold * threshold < e.movementX * e.movementX
+                + e.movementY * e.movementY) {
+                quitApp();
+            }
+        });
+    }, 1500);
+}
 
 let containers = [document.getElementById("video"), document.getElementById("video2")]
 let currentPlayer = 0;
@@ -291,6 +391,13 @@ containers.forEach((video) => {
         video.style.backgroundColor = "black";
     });
     video.addEventListener("error", videoError);
+    video.addEventListener("ended", () => {
+        if (blackScreen || video !== containers[currentPlayer]) {
+            return;
+        }
+        clearTimeout(nextVideoTimeout);
+        newVideo();
+    });
 });
 
 function videoError(event) {
@@ -310,7 +417,7 @@ function videoError(event) {
     }
 }
 
-function prepVideo(videoContainer, direction, callback) {
+function prepVideo(videoContainer, direction, callback, options = {}) {
     if (blackScreen) {
         if (callback) {
             callback(false);
@@ -318,7 +425,10 @@ function prepVideo(videoContainer, direction, callback) {
         return
     }
     containers[videoContainer].src = "";
-    electron.ipcRenderer.invoke('newVideoId', {lastPlayed: currentlyPlaying, direction: direction ?? "next"}).then((id) => {
+    const videoIdPromise = options.videoId
+        ? Promise.resolve(options.videoId)
+        : electron.ipcRenderer.invoke('newVideoId', {lastPlayed: currentlyPlaying, direction: direction ?? "next"});
+    videoIdPromise.then((id) => {
         if (!id) {
             if (callback) {
                 callback(false);
@@ -353,10 +463,10 @@ function prepVideo(videoContainer, direction, callback) {
                 return;
             }
             videoInfo = videos[index];
-            downloadedVideos = electron.store.get("downloadedVideos");
-            videoSRC = getVideoSource(videoInfo, electron.store.get('videoFileType'));
+            downloadedVideos = modeStoreGet("downloadedVideos");
+            videoSRC = getVideoSource(videoInfo, modeStoreGet('videoFileType'));
             if (downloadedVideos.includes(videoInfo.id)) {
-                videoSRC = `${electron.store.get('cachePath')}/${videoInfo.id}.mov`;
+                videoSRC = `${modeStoreGet('cachePath')}/${videoInfo.id}.mov`;
             }
         }
         if (!videoSRC) {
@@ -370,8 +480,17 @@ function prepVideo(videoContainer, direction, callback) {
         containers[videoContainer].src = videoSRC;
         playbackMetrics.selectedVideoId = id;
         playbackMetrics.selectedSource = detectSourceProfile(videoInfo, videoSRC);
-        containers[videoContainer].playbackRate = Number(electron.store.get('playbackSpeed'));
+        containers[videoContainer].playbackRate = isWallpaperMode ? Math.max(0.05, wallpaperCurrentPlaybackRate) : getConfiguredPlaybackSpeed();
         containers[videoContainer].pause();
+        const resumeTime = Number(options.currentTime);
+        if (Number.isFinite(resumeTime) && resumeTime > 0) {
+            containers[videoContainer].addEventListener('loadedmetadata', () => {
+                const duration = containers[videoContainer].duration;
+                containers[videoContainer].currentTime = Number.isFinite(duration) && duration > 2
+                    ? Math.min(resumeTime, Math.max(0, duration - 1))
+                    : resumeTime;
+            }, {once: true});
+        }
 
         if (callback) {
             callback(true);
@@ -392,7 +511,7 @@ function playVideo(videoContainer, loadedCallback) {
     containers[videoContainer].play().catch((error) => {
         console.warn("Video play was interrupted", error);
     });
-    containers[videoContainer].playbackRate = Number(electron.store.get('playbackSpeed'));
+    containers[videoContainer].playbackRate = isWallpaperMode ? Math.max(0.05, wallpaperCurrentPlaybackRate) : getConfiguredPlaybackSpeed();
 
     if (loadedCallback) {
         loadedCallback();
@@ -486,18 +605,23 @@ function newVideo(direction = "next") {
     });
 }
 
-function scheduleNextVideo() {
+function scheduleNextVideo(videoContainer = prePlayer) {
     clearTimeout(nextVideoTimeout);
-    const durationMs = containers[prePlayer].duration * 1000;
-    if (!Number.isFinite(durationMs) || durationMs <= 0) {
-        logPlayback("scheduleNextVideo skipped", {duration: containers[prePlayer].duration, prePlayer});
+    const video = containers[videoContainer];
+    const duration = Number(video.duration);
+    const currentTime = Number(video.currentTime) || 0;
+    const playbackRate = Math.max(0.05, Number(video.playbackRate) || getConfiguredPlaybackSpeed());
+    if (!Number.isFinite(duration) || duration <= 0) {
+        logPlayback("scheduleNextVideo skipped", {duration: video.duration, videoContainer});
         return;
     }
-    logPlayback("scheduleNextVideo", {inMs: Math.max(1000, durationMs - transitionLength - 500), durationMs, prePlayer});
+    const remainingMs = Math.max(0, (duration - currentTime) * 1000 / playbackRate);
+    const nextInMs = Math.max(1000, remainingMs - transitionLength - 500);
+    logPlayback("scheduleNextVideo", {inMs: nextInMs, durationMs: duration * 1000, currentTime, playbackRate, videoContainer});
     nextVideoTimeout = setTimeout(() => {
         newVideo();
         numErrors = 0;
-    }, Math.max(1000, durationMs - transitionLength - 500));
+    }, nextInMs);
 }
 
 function switchVideoContainers() {
@@ -507,6 +631,8 @@ function switchVideoContainers() {
         containers[prePlayer].style.display = '';
     } else if (useModernTransitions) {
         containers[currentPlayer].style.opacity = '0';
+        containers[currentPlayer].style.display = 'none';
+        containers[prePlayer].style.display = '';
         containers[prePlayer].style.opacity = '1';
     }
     containers[currentPlayer].pause();
@@ -571,10 +697,10 @@ function drawDynamicText() {
     }
 }
 
-let transitionLength = electron.store.get('videoTransitionLength');
+let transitionLength = modeStoreGet('videoTransitionLength');
 let transitionPercent = 1;
 let transitionSource = "";
-const useModernTransitions = !electron.store.get("videoQuality") && (electron.store.get("modernTransitions") ?? true);
+const useModernTransitions = !modeStoreGet("videoQuality") && (modeStoreGet("modernTransitions") ?? true);
 
 function runTransitionIn(time, onComplete) {
     const complete = once(onComplete);
@@ -593,6 +719,7 @@ function transitionVideosModern(time, onComplete) {
 
     fromVideo.style.transition = `opacity ${time}ms linear`;
     toVideo.style.transition = `opacity ${time}ms linear`;
+    fromVideo.style.display = '';
     toVideo.style.display = '';
     toVideo.style.opacity = '0';
 
@@ -779,8 +906,8 @@ const transitionDirections = {
     "fadeCircle": ["normal", "reverse"]
 };
 let transitionSettings = {
-    "type": electron.store.get("transitionType"),
-    "direction": electron.store.get("transitionDirection")
+    "type": modeStoreGet("transitionType"),
+    "direction": modeStoreGet("transitionDirection")
 };
 
 //put the video on the canvas
@@ -963,10 +1090,10 @@ let widthScale = window.innerWidth / ((16 / 9) * window.innerHeight);
 let heightScale = window.innerHeight / (window.innerWidth / (16 / 9));
 
 function drawImage(context, image) {
-    if (electron.store.get("fillMode") === "stretch" || aspectRatio === 16 / 9) {
+    if (modeStoreGet("fillMode") === "stretch" || aspectRatio === 16 / 9) {
         //stretch
         context.drawImage(image, 0, 0, window.innerWidth, window.innerHeight);
-    } else if (electron.store.get("fillMode") === "crop") {
+    } else if (modeStoreGet("fillMode") === "crop") {
         //crop
         if (widthScale > 1) {
             context.drawImage(image, 0, (image.videoHeight - image.videoHeight / widthScale) / 2, image.videoWidth, image.videoHeight / widthScale, 0, 0, window.innerWidth, window.innerHeight);
@@ -980,7 +1107,7 @@ let c1 = document.getElementById('canvasVideo');
 let ctx1 = c1.getContext('2d');
 c1.width = window.innerWidth;
 c1.height = window.innerHeight;
-let videoFilters = electron.store.get('videoFilters');
+let videoFilters = modeStoreGet('videoFilters');
 let filterString = "";
 for (let i = 0; i < videoFilters.length; i++) {
     if (videoFilters[i].value !== videoFilters[i].defaultValue) {
@@ -990,27 +1117,27 @@ for (let i = 0; i < videoFilters.length; i++) {
 ctx1.filter = filterString;
 containers.forEach((container, index) => {
     container.style.filter = filterString;
-    container.style.display = '';
+    container.style.display = index === currentPlayer ? '' : 'none';
     container.style.opacity = index === currentPlayer ? '1' : '0';
 });
 
 // Fix for issue #110
 // Replace requestAnimationFrame with our own that never sleeps
 const drawVideoRequests = [];
-const animationFPS = Number(electron.store.get("fps")) || 60;
-const forceAlternateRenderMethod = electron.store.get("alternateRenderMethod") ?? false;
-const autoAlternateRenderMethod = (electron.store.get("alternateRenderAuto") ?? true)
+const animationFPS = Number(modeStoreGet("fps")) || 60;
+const forceAlternateRenderMethod = modeStoreGet("alternateRenderMethod") ?? false;
+const autoAlternateRenderMethod = (modeStoreGet("alternateRenderAuto") ?? true)
     && !forceAlternateRenderMethod
-    && !electron.store.get("videoQuality")
+    && !modeStoreGet("videoQuality")
     && !useModernTransitions
-    && Number(electron.store.get("numDisplays") ?? 1) > 1;
+    && Number(modeStoreGet("numDisplays") ?? 1) > 1;
 const useAlternateRenderMethod = forceAlternateRenderMethod || autoAlternateRenderMethod;
-let videoQuality = electron.store.get("videoQuality");
+let videoQuality = modeStoreGet("videoQuality");
 const shouldRenderWithCanvas = !videoQuality && !useModernTransitions;
 
 if (autoAlternateRenderMethod) {
     logPlayback("auto alternate render fallback enabled", {
-        numDisplays: electron.store.get("numDisplays") ?? 1
+        numDisplays: modeStoreGet("numDisplays") ?? 1
     });
 }
 
@@ -1062,21 +1189,21 @@ function runClock(position, line, timeString) {
 
 //set up css
 const globalFontSize = getFontSizeCssValue(
-    electron.store.get('textSize'),
-    electron.store.get('textSizeUnit'),
+    modeStoreGet('textSize'),
+    modeStoreGet('textSizeUnit'),
     2,
     "vw"
 );
 $('.displayText')
-    .css('font-family', `"${electron.store.get('textFont')}"`)
+    .css('font-family', `"${modeStoreGet('textFont')}"`)
     .css('font-size', globalFontSize)
-    .css('color', `${electron.store.get('textColor')}`)
-    .css('line-height', `${electron.store.get('textLineHeight')}`)
-    .css('font-weight', `${electron.store.get('textFontWeight')}`);
+    .css('color', `${modeStoreGet('textColor')}`)
+    .css('line-height', `${modeStoreGet('textLineHeight')}`)
+    .css('font-weight', `${modeStoreGet('textFontWeight')}`);
 $('#textDisplayArea').css('opacity', 0);
 
 //draw text
-let displayText = electron.store.get('displayText') ?? [];
+let displayText = modeStoreGet('displayText') ?? [];
 let html = "";
 let textOverlayInitialized = false;
 
@@ -1109,6 +1236,89 @@ function clearDisplayTextTimers() {
                 line.clockTimeout = null;
             }
         }
+    }
+}
+
+function reportWallpaperPlaybackState() {
+    if (!isWallpaperMode || blackScreen) {
+        return;
+    }
+    const activeVideo = containers[currentPlayer];
+    if (!activeVideo?.videoId) {
+        return;
+    }
+    electron.ipcRenderer.send('wallpaperPlaybackState', {
+        videoId: activeVideo.videoId,
+        currentTime: activeVideo.currentTime,
+        duration: activeVideo.duration,
+        screenNumber
+    });
+}
+
+function updateWallpaperSpeedEase() {
+    if (!isWallpaperMode) {
+        return;
+    }
+    const configuredRate = getConfiguredPlaybackSpeed();
+    const pauseFloor = Math.min(configuredRate, WALLPAPER_PAUSE_RATE_FLOOR);
+    const slowdownTicks = Math.max(1, WALLPAPER_PAUSE_AFTER_MS / WALLPAPER_SLOWDOWN_TICK_MS);
+    const step = Math.max(0.04, (configuredRate - pauseFloor) / slowdownTicks);
+    if (wallpaperFullscreenActive) {
+        clearTimeout(nextVideoTimeout);
+        setWallpaperPlaybackSmoothing(true);
+        pauseWallpaperAfterSlowdown();
+        if (wallpaperCurrentPlaybackRate === 0) {
+            return;
+        }
+        wallpaperCurrentPlaybackRate = Math.max(pauseFloor, wallpaperCurrentPlaybackRate - step);
+        applyPlaybackRate(wallpaperCurrentPlaybackRate);
+        return;
+    }
+
+    clearWallpaperPauseTimeout();
+    if (wallpaperCurrentPlaybackRate === 0) {
+        wallpaperCurrentPlaybackRate = configuredRate;
+        applyPlaybackRate(wallpaperCurrentPlaybackRate);
+        for (const container of containers) {
+            if (container.videoId) {
+                container.play().catch(() => {});
+            }
+        }
+        scheduleNextVideo(currentPlayer);
+        setWallpaperPlaybackSmoothing(false);
+        return;
+    }
+
+    wallpaperCurrentPlaybackRate = Math.min(configuredRate, wallpaperCurrentPlaybackRate + step);
+    applyPlaybackRate(wallpaperCurrentPlaybackRate);
+    if (wallpaperCurrentPlaybackRate >= configuredRate) {
+        setWallpaperPlaybackSmoothing(false);
+    }
+}
+
+function setWallpaperFullscreenActive(isActive) {
+    if (!isWallpaperMode) {
+        return;
+    }
+    const wasFullscreenActive = wallpaperFullscreenActive;
+    wallpaperFullscreenActive = Boolean(isActive);
+    if (!wallpaperFullscreenActive && wallpaperCurrentPlaybackRate === 0) {
+        wallpaperCurrentPlaybackRate = getConfiguredPlaybackSpeed();
+        applyPlaybackRate(wallpaperCurrentPlaybackRate);
+        for (const container of containers) {
+            if (container.videoId && container.paused) {
+                container.play().catch(() => {});
+            }
+        }
+        setWallpaperPlaybackSmoothing(false);
+    } else if (!wallpaperFullscreenActive) {
+        clearWallpaperPauseTimeout();
+    }
+    if (wasFullscreenActive && !wallpaperFullscreenActive) {
+        scheduleNextVideo(currentPlayer);
+    }
+    if (!wallpaperSpeedEaseInterval) {
+        wallpaperSpeedEaseInterval = setInterval(updateWallpaperSpeedEase, WALLPAPER_SLOWDOWN_TICK_MS);
     }
 }
 
@@ -1159,7 +1369,7 @@ function chooseNextMinimalModePosition(currentPosition = "") {
 }
 
 function formatMinimalModeTime(date = new Date()) {
-    const customFormat = String(electron.store.get("minimalTimeFormat") ?? "").trim();
+    const customFormat = String(modeStoreGet("minimalTimeFormat") ?? "").trim();
     if (customFormat) {
         return moment(date).format(customFormat);
     }
@@ -1167,28 +1377,28 @@ function formatMinimalModeTime(date = new Date()) {
 }
 
 function getMinimalModeClockStyles() {
-    const useDefaultFont = electron.store.get("minimalModeDefaultFont") ?? true;
-    const baseFontSizeValue = normalizeFontSizeValue(electron.store.get('textSize'), 2);
-    const baseFontSizeUnit = normalizeFontSizeUnit(electron.store.get('textSizeUnit'), "vw");
+    const useDefaultFont = modeStoreGet("minimalModeDefaultFont") ?? true;
+    const baseFontSizeValue = normalizeFontSizeValue(modeStoreGet('textSize'), 2);
+    const baseFontSizeUnit = normalizeFontSizeUnit(modeStoreGet('textSizeUnit'), "vw");
     return {
         fontFamily: useDefaultFont
-            ? electron.store.get('textFont')
-            : (electron.store.get('minimalModeFont') || electron.store.get('textFont')),
+            ? modeStoreGet('textFont')
+            : (modeStoreGet('minimalModeFont') || modeStoreGet('textFont')),
         fontSize: getFontSizeCssValue(
-            useDefaultFont ? electron.store.get('textSize') : electron.store.get('minimalModeFontSize'),
-            useDefaultFont ? electron.store.get('textSizeUnit') : electron.store.get('minimalModeFontSizeUnit'),
+            useDefaultFont ? modeStoreGet('textSize') : modeStoreGet('minimalModeFontSize'),
+            useDefaultFont ? modeStoreGet('textSizeUnit') : modeStoreGet('minimalModeFontSizeUnit'),
             baseFontSizeValue,
             baseFontSizeUnit
         ),
         color: useDefaultFont
-            ? electron.store.get('textColor')
-            : (electron.store.get('minimalModeFontColor') || electron.store.get('textColor')),
+            ? modeStoreGet('textColor')
+            : (modeStoreGet('minimalModeFontColor') || modeStoreGet('textColor')),
         fontWeight: useDefaultFont
-            ? electron.store.get('textFontWeight')
-            : (electron.store.get('minimalModeFontWeight') || electron.store.get('textFontWeight')),
+            ? modeStoreGet('textFontWeight')
+            : (modeStoreGet('minimalModeFontWeight') || modeStoreGet('textFontWeight')),
         opacity: useDefaultFont
             ? globalDefaultTextOpacity
-            : normalizeOpacity(electron.store.get('minimalModeOpacity'), globalDefaultTextOpacity)
+            : normalizeOpacity(modeStoreGet('minimalModeOpacity'), globalDefaultTextOpacity)
     };
 }
 
@@ -1265,6 +1475,42 @@ function clearVideoContainersForMinimalMode() {
         container.load();
         container.style.opacity = "0";
     });
+}
+
+function resumeVideoPlayback(state) {
+    if (!state?.videoId) {
+        newVideo();
+        return;
+    }
+    clearTimeout(nextVideoTimeout);
+    videoChangeState.inProgress = true;
+    const targetPlayer = prePlayer;
+    prepVideo(targetPlayer, "next", (prepared) => {
+        if (!prepared) {
+            videoChangeState.inProgress = false;
+            newVideo();
+            return;
+        }
+        clearVideoWaitingTimeout();
+        const startResumedVideo = () => {
+            if (prePlayer !== targetPlayer) {
+                return;
+            }
+            playVideo(targetPlayer, () => {
+                runTransitionIn(0, completeVideoChange);
+                scheduleNextVideo();
+            });
+        };
+        if (containers[targetPlayer].readyState >= 3) {
+            startResumedVideo();
+            return;
+        }
+        containers[targetPlayer].addEventListener('canplay', startResumedVideo, {once: true});
+        videoChangeState.waitingTimeout = setTimeout(() => {
+            videoChangeState.waitingTimeout = null;
+            startResumedVideo();
+        }, 1500);
+    }, state);
 }
 
 function activateMinimalMode(options = {}) {
@@ -1440,12 +1686,12 @@ function displayTextPosition(position, displayLocation) {
             const lineFontSize = getFontSizeCssValue(
                 lineSettings.fontSize,
                 lineSettings.fontSizeUnit,
-                normalizeFontSizeValue(electron.store.get('textSize'), 2),
-                normalizeFontSizeUnit(electron.store.get('textSizeUnit'), "vw")
+                normalizeFontSizeValue(modeStoreGet('textSize'), 2),
+                normalizeFontSizeUnit(modeStoreGet('textSizeUnit'), "vw")
             );
-            const lineFontFamily = lineSettings.font || electron.store.get('textFont');
-            const lineFontColor = lineSettings.fontColor || electron.store.get('textColor');
-            const lineFontWeight = lineSettings.fontWeight || electron.store.get('textFontWeight');
+            const lineFontFamily = lineSettings.font || modeStoreGet('textFont');
+            const lineFontColor = lineSettings.fontColor || modeStoreGet('textColor');
+            const lineFontWeight = lineSettings.fontWeight || modeStoreGet('textFontWeight');
             lineElement
                 .css('font-family', `"${lineFontFamily}"`)
                 .css('font-size', lineFontSize)
@@ -1478,7 +1724,7 @@ function createContentLine(contentLine, position, line) {
             runClock(position, line, contentLine.timeString);
             break;
         case "astronomy":
-            const astronomy = electron.store.get("astronomy");
+            const astronomy = modeStoreGet("astronomy");
             let type = contentLine.astronomy;
             if (contentLine.astronomy === "sunrise/set") {
                 if (new Date() < new Date(astronomy.sunrise) || new Date() > new Date(astronomy.sunset)) {
@@ -1530,7 +1776,7 @@ for (let i = 0; i < displayText.random.length; i++) {
 if (random) {
     displayText.random.currentLocation = "none";
     randomInitialTimeout = setTimeout(switchRandomText, 750);
-    randomInterval = setInterval(switchRandomText, electron.store.get('randomSpeed') * 1000);
+    randomInterval = setInterval(switchRandomText, modeStoreGet('randomSpeed') * 1000);
 }
 
 function switchRandomText() {
@@ -1590,8 +1836,15 @@ document.addEventListener("visibilitychange", () => {
 //play a video unless the window was launched directly into minimal mode
 if (startInMinimalMode) {
     activateMinimalMode({immediate: true});
+} else if (resumePlaybackState.videoId) {
+    resumeVideoPlayback(resumePlaybackState);
 } else {
     newVideo();
+}
+
+if (isWallpaperMode) {
+    wallpaperPlaybackStateInterval = setInterval(reportWallpaperPlaybackState, 1000);
+    wallpaperSpeedEaseInterval = setInterval(updateWallpaperSpeedEase, WALLPAPER_SLOWDOWN_TICK_MS);
 }
 
 electron.ipcRenderer.on('newVideo', (_event, direction) => {
@@ -1623,3 +1876,5 @@ electron.ipcRenderer.on('screensaverVisible', () => {
     textVisibilitySignaled = true;
     startInitialTextFadeIfReady();
 });
+
+electron.ipcRenderer.on('wallpaperFullscreenState', setWallpaperFullscreenActive);

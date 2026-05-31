@@ -45,6 +45,8 @@
         <div class="appTabGroup appTabGroupActions">
             <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openPreview()">Preview Aerial</button>
             <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openMinimalPreview()">Preview Minimal Mode</button>
+            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="startWallpaper()">Start Wallpaper</button>
+            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="stopWallpaper()">Stop Wallpaper</button>
         </div>
     </div>
 </div>
@@ -254,6 +256,16 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="formRow">
+                            <label class="formLabel" for="disableWhenVideoPlaybackActive">Do not start when video is playing</label>
+                            <div class="formControl">
+                                <div class="positionCheckboxRow">
+                                    <input type="checkbox" id="disableWhenVideoPlaybackActive" class="w3-check"
+                                           onclick="updateSetting('disableWhenVideoPlaybackActive','check')">
+                                    <label for="disableWhenVideoPlaybackActive">Enabled</label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -414,6 +426,10 @@
             <div id="styleSettings" class="settingsCard" style="display: none">
                 <div class="w3-container w3-blue cardHeader">
                     <h3>Style</h3>
+                    <div class="modeSwitchInline">
+                        <button class="w3-button w3-blue w3-border" data-config-mode="screensaver" onclick="setConfigMode('screensaver')">Screensaver</button>
+                        <button class="w3-button w3-white w3-border" data-config-mode="wallpaper" onclick="setConfigMode('wallpaper')">Wallpaper</button>
+                    </div>
                 </div>
                 <div class="w3-display-container cardContent settingsCardBody">
                     <div class="settingSplitRow">
@@ -422,8 +438,17 @@
                         <span onclick="resetSetting('playbackSpeed', 'slider', 1)"><i
                             class="fa fa-undo"></i></span>
                     </div>
-                    <input type="range" min=".75" max="4" value="1" step=".05" id="playbackSpeed" class="slider"
-                           onchange="updateSetting('playbackSpeed','slider')">
+                    <input type="range" min=".25" max="4" value="1" step=".05" id="playbackSpeed" class="slider"
+                           oninput="previewSliderSetting('playbackSpeed')" onchange="commitSliderSetting('playbackSpeed')">
+                    <div class="sliderTicks">
+                        <span style="left: calc(10px + 0% - 0px)">0.25x</span>
+                        <span style="left: calc(10px + 6.67% - 1.33px)">0.5x</span>
+                        <span style="left: calc(10px + 13.33% - 2.67px)">0.75x</span>
+                        <span style="left: calc(10px + 20% - 4px)">1x</span>
+                        <span style="left: calc(10px + 46.67% - 9.33px)">2x</span>
+                        <span style="left: calc(10px + 73.33% - 14.67px)">3x</span>
+                        <span style="left: calc(10px + 100% - 20px)">4x</span>
+                    </div>
                     <h4>Filter Settings
                         <span class="w3-right" onclick="resetFilterSettings()"><i class="fa fa-undo"></i></span></h4>
                     <div class="w3-display-container" id="videoFilterSettings"></div>
@@ -530,6 +555,30 @@
                     <p class="w3-small settingHint">This option will cause Aerial to run on system start up
                         and launch itself after your system is idle</p>
                     <div class="settingInlineRow">
+                        <input type="checkbox" id="startWallpaperOnStartup" class="w3-check"
+                               onclick="updateSetting('startWallpaperOnStartup','check'); ensureTrayForWallpaperStartup();">
+                        <label for="startWallpaperOnStartup">Start wallpaper when Aerial launches</label>
+                    </div>
+                    <p class="w3-small settingHint">Requires Auto launch from system tray to start automatically with Windows.</p>
+                    <div class="settingInlineRow">
+                        <input type="checkbox" id="syncScreensaverToWallpaper" class="w3-check"
+                               onclick="updateSetting('syncScreensaverToWallpaper','check')">
+                        <label for="syncScreensaverToWallpaper">Continue wallpaper playback when screensaver starts</label>
+                    </div>
+                    <p class="w3-small settingHint">When wallpaper is running, the screensaver starts from the same wallpaper video and timestamp and uses the wallpaper video selection.</p>
+                    <div class="settingInlineRow">
+                        <input type="checkbox" id="slowWallpaperWhenFullscreenAppActive" class="w3-check"
+                               onclick="updateSetting('slowWallpaperWhenFullscreenAppActive','check')">
+                        <label for="slowWallpaperWhenFullscreenAppActive">Slow wallpaper when a display is covered</label>
+                    </div>
+                    <p class="w3-small settingHint">When enabled, each display's wallpaper eases down to a pause while that display is covered by fullscreen, maximized, or tiled app windows, then resumes when it clears.</p>
+                    <div class="settingInlineRow">
+                        <input type="checkbox" id="slowAllWallpaperWhenAnyFullscreenAppActive" class="w3-check"
+                               onclick="updateSetting('slowAllWallpaperWhenAnyFullscreenAppActive','check')">
+                        <label for="slowAllWallpaperWhenAnyFullscreenAppActive">Slow all wallpaper when any app is fullscreen</label>
+                    </div>
+                    <p class="w3-small settingHint">When enabled, a fullscreen app on any display pauses wallpaper playback on every display. Ordinary window coverage still follows the per-display option above.</p>
+                    <div class="settingInlineRow">
                         <input type="checkbox" id="enableGlobalShortcut" class="w3-check"
                                onclick="updateSetting('enableGlobalShortcut','check'); newGlobalShortcut();">
                         <label for="enableGlobalShortcut">Use a shortcut to launch Aerial</label>
@@ -537,7 +586,7 @@
                     <div class="settingInlineRow settingInlineIndentedRow">
                         <label for="globalShortcutModifier1">Modifier:</label>
                         <select id="globalShortcutModifier1"
-                                onclick="updateSetting('globalShortcutModifier1','select'); newGlobalShortcut();">
+                                onclick="updateSetting('globalShortcutModifier1','select'); validateShortcutSettings(); newGlobalShortcut();">
                             <option value="Shift">Shift</option>
                             <option value="Control">Control</option>
                             <option value="Alt">Alt</option>
@@ -545,7 +594,7 @@
                         </select>
                         <label for="globalShortcutModifier2">+</label>
                         <select id="globalShortcutModifier2"
-                                onclick="updateSetting('globalShortcutModifier2','select'); newGlobalShortcut();">
+                                onclick="updateSetting('globalShortcutModifier2','select'); validateShortcutSettings(); newGlobalShortcut();">
                             <option value="+Shift">Shift</option>
                             <option value="+Control">Control</option>
                             <option value="+Alt">Alt</option>
@@ -555,6 +604,33 @@
                         <label for="globalShortcutKey">Key:</label>
                         <input type="text" id="globalShortcutKey">
                     </div>
+                    <div class="settingInlineRow">
+                        <input type="checkbox" id="enableWallpaperShortcut" class="w3-check"
+                               onclick="updateSetting('enableWallpaperShortcut','check'); validateShortcutSettings(); newGlobalShortcut();">
+                        <label for="enableWallpaperShortcut">Use a shortcut to toggle wallpaper</label>
+                    </div>
+                    <div class="settingInlineRow settingInlineIndentedRow">
+                        <label for="wallpaperShortcutModifier1">Modifier:</label>
+                        <select id="wallpaperShortcutModifier1"
+                                onclick="updateSetting('wallpaperShortcutModifier1','select'); validateShortcutSettings(); newGlobalShortcut();">
+                            <option value="Shift">Shift</option>
+                            <option value="Control">Control</option>
+                            <option value="Alt">Alt</option>
+                            <option value="Super">Windows</option>
+                        </select>
+                        <label for="wallpaperShortcutModifier2">+</label>
+                        <select id="wallpaperShortcutModifier2"
+                                onclick="updateSetting('wallpaperShortcutModifier2','select'); validateShortcutSettings(); newGlobalShortcut();">
+                            <option value="+Shift">Shift</option>
+                            <option value="+Control">Control</option>
+                            <option value="+Alt">Alt</option>
+                            <option value="+Super">Windows</option>
+                            <option value="">None</option>
+                        </select>
+                        <label for="wallpaperShortcutKey">Key:</label>
+                        <input type="text" id="wallpaperShortcutKey">
+                    </div>
+                    <p id="shortcutValidationMessage" class="w3-small settingHint"></p>
                     <div class="settingInlineRow">
                         <input type="checkbox" id="videoQuality" class="w3-check"
                                onclick="updateSetting('videoQuality','check')">
@@ -579,6 +655,10 @@
                             <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
                                     onclick="electron.ipcRenderer.send('openPlaybackLog');">
                                 Open Playback Log
+                            </button>
+                            <button class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                    onclick="logMediaStatus()">
+                                Log Media Status
                             </button>
                             <button class="w3-button w3-white w3-border w3-border-red w3-round-large"
                                     onclick="clearLogs('lifecycle')">
@@ -731,6 +811,10 @@
 
     </div>
     <div id="videoTab" class="tab" style="display: none">
+        <div class="modeSwitchBar">
+            <button class="w3-button w3-blue w3-border" data-config-mode="screensaver" onclick="setConfigMode('screensaver')">Screensaver</button>
+            <button class="w3-button w3-white w3-border" data-config-mode="wallpaper" onclick="setConfigMode('wallpaper')">Wallpaper</button>
+        </div>
         <div class="w3-sidebar w3-light-grey w3-bar-block" id="videoList" style="width:34%; height: 84%">
         </div>
         <div id="videoCard" class="settingsCard" style="margin-left: calc(34% + 14px)">
@@ -745,6 +829,10 @@
         </div>
     </div>
     <div id="textTab" class="tab" style="display: none">
+        <div class="modeSwitchBar">
+            <button class="w3-button w3-blue w3-border" data-config-mode="screensaver" onclick="setConfigMode('screensaver')">Screensaver</button>
+            <button class="w3-button w3-white w3-border" data-config-mode="wallpaper" onclick="setConfigMode('wallpaper')">Wallpaper</button>
+        </div>
         <div class="w3-sidebar w3-light-grey w3-bar-block" style="width:20%">
             <div class="settingsListItem sidebarHeader"><h3 class="w3-bar-item"><i class="fa fa-paragraph"></i> Text</h3></div>
             <a onclick="selectTextSetting('position')" id="textSettingsList-position"

@@ -17,10 +17,17 @@
     object-fit: cover;
     z-index: -101;
     opacity: 0;
+    filter: none;
+    transform: translateZ(0) scale(1.001);
+    transition: filter 500ms ease;
 }
 
 #video {
     opacity: 1;
+}
+
+.fullscreen-bg__video.wallpaperPlaybackSmoothing {
+    filter: blur(2px);
 }
 
 .displayText {

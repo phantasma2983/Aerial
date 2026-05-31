@@ -15,19 +15,19 @@ function storeSetSync(key, value) {
 contextBridge.exposeInMainWorld("electron", {
     ipcRenderer: {
         send: (channel, data) => {
-            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "openMinimalPreview", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "consoleLog", "windowControl", "startAppUpdate", "installAppUpdate"];
+            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "openMinimalPreview", "startWallpaper", "stopWallpaper", "nextWallpaperScene", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "wallpaperPlaybackState", "consoleLog", "windowControl", "startAppUpdate", "installAppUpdate"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.send(channel, data);
             }
         },
         on: (channel, func) => {
-            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "enterMinimalMode", "enterMinimalModeImmediate", "showWelcome", "updateAttribute", "screenNumber", "windowStateChanged", "updateStateChanged"];
+            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "enterMinimalMode", "enterMinimalModeImmediate", "showWelcome", "updateAttribute", "screenNumber", "wallpaperFullscreenState", "windowStateChanged", "updateStateChanged"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.on(channel, (event, ...args) => func(...args));
             }
         },
         invoke: (channel, args) => {
-            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "getWeatherData", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics", "getWindowState", "getUpdateState"];
+            const validChannels = ["newVideoId", "getCacheDiagnostics", "getLogDiagnostics", "getMediaPlaybackStatus", "logMediaPlaybackStatus", "mediaControl", "getWeatherData", "manageCache", "clearLogs", "exportConfig", "createConfigBackup", "importConfig", "copyDiagnostics", "getWindowState", "getUpdateState"];
             if (validChannels.includes(channel)) {
                 return ipcRenderer.invoke(channel, args);
             }

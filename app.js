@@ -24,6 +24,12 @@ const AutoLaunch = require('auto-launch');
 const {getVideoSource, sanitizeExtraVideo} = require('./shared/video-utils');
 const APP_ICON_PATH = path.join(__dirname, 'icon.ico');
 const APP_USER_MODEL_ID = "com.phantasma2983.aerial";
+const MEDIA_HELPER_RESOURCE_PATH = path.join("media-helper", "aerial-media-helper.exe");
+const WALLPAPER_SCOPED_SETTINGS_VERSION = 3;
+const WALLPAPER_AUTOSTART_DELAY_MS = 1500;
+const WALLPAPER_ATTACH_MAX_ATTEMPTS = 3;
+const WALLPAPER_ATTACH_RETRY_DELAY_MS = 2000;
+const WALLPAPER_DISPLAY_COVERAGE_THRESHOLD = 0.94;
 const LEGACY_UNINSTALL_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\17c6ea6b-270a-5297-8e23-9bcda4a29a48";
 const APPID_UNINSTALL_KEY = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\7d047ff4-f1b4-58c5-a9ab-6eaec19eeed0";
 let geolocationPermissionHandlersConfigured = false;
@@ -770,6 +776,47 @@ function sanitizeFavoriteVideoIds(videoIds) {
     ))));
 }
 
+function cloneConfigValue(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+
+function isValidDisplayTextConfig(value) {
+    return Boolean(
+        value &&
+        typeof value === "object" &&
+        Array.isArray(value.positionList) &&
+        value.positionList.every((position) => Array.isArray(value[position]))
+    );
+}
+
+function copySettingIfMissing(targetKey, sourceKey) {
+    if (store.get(targetKey) !== undefined) {
+        return false;
+    }
+    store.set(targetKey, cloneConfigValue(store.get(sourceKey)));
+    return true;
+}
+
+function createEmptyDisplayTextLines() {
+    return Array.from({length: 4}, () => ({type: "none", defaultFont: true}));
+}
+
+function clearDisplayTextPosition(displayText, position) {
+    if (!isValidDisplayTextConfig(displayText) || !displayText.positionList.includes(position)) {
+        return displayText;
+    }
+    displayText[position] = createEmptyDisplayTextLines();
+    if (displayText.maxWidth && typeof displayText.maxWidth === "object") {
+        displayText.maxWidth[position] = displayText.maxWidth[position] || "50%";
+    }
+    return displayText;
+}
+
+function createWallpaperDisplayTextDefaults(displayText) {
+    const wallpaperDisplayText = cloneConfigValue(displayText);
+    return clearDisplayTextPosition(wallpaperDisplayText, "random");
+}
+
 function normalizeVideoProfiles(profiles) {
     const source = Array.isArray(profiles) ? profiles : [];
     const usedIds = new Set();
@@ -799,6 +846,64 @@ function syncVideoProfiles() {
     store.set("videoProfileDefaultId", defaultId);
     store.set("videoProfileAutoApplyOnLaunch", store.get("videoProfileAutoApplyOnLaunch") ?? false);
     return profiles;
+}
+
+function ensureWallpaperScopedSettings(displayText, knownVideoIds) {
+    let changed = false;
+    const fallbackAllowedVideos = store.get('allowedVideos') ?? [];
+    const wallpaperAllowedVideos = Array.isArray(store.get('wallpaperAllowedVideos'))
+        ? store.get('wallpaperAllowedVideos')
+        : fallbackAllowedVideos;
+    store.set('wallpaperAllowedVideos', wallpaperAllowedVideos.filter((videoId) => (
+        typeof videoId === "string" &&
+        (videoId.startsWith("_") || knownVideoIds.has(videoId))
+    )));
+
+    const scopedTextPairs = [
+        ["wallpaperTextFont", "textFont"],
+        ["wallpaperTextSize", "textSize"],
+        ["wallpaperTextSizeUnit", "textSizeUnit"],
+        ["wallpaperTextColor", "textColor"],
+        ["wallpaperTextOpacity", "textOpacity"],
+        ["wallpaperTextLineHeight", "textLineHeight"],
+        ["wallpaperTextFontWeight", "textFontWeight"],
+        ["wallpaperTextFadeInDuration", "textFadeInDuration"],
+        ["wallpaperTextFadeOutDuration", "textFadeOutDuration"],
+        ["wallpaperPlaybackSpeed", "playbackSpeed"],
+        ["wallpaperVideoFilters", "videoFilters"],
+        ["wallpaperRandomSpeed", "randomSpeed"]
+    ];
+    for (const [targetKey, sourceKey] of scopedTextPairs) {
+        changed = copySettingIfMissing(targetKey, sourceKey) || changed;
+    }
+
+    let wallpaperDisplayText = store.get('wallpaperDisplayText');
+    if (!isValidDisplayTextConfig(wallpaperDisplayText)) {
+        wallpaperDisplayText = createWallpaperDisplayTextDefaults(displayText);
+        store.set('wallpaperDisplayText', wallpaperDisplayText);
+        changed = true;
+    } else if (Number(store.get("wallpaperScopedSettingsVersion") ?? 0) < WALLPAPER_SCOPED_SETTINGS_VERSION) {
+        wallpaperDisplayText = cloneConfigValue(wallpaperDisplayText);
+        clearDisplayTextPosition(wallpaperDisplayText, "random");
+        store.set('wallpaperDisplayText', wallpaperDisplayText);
+        changed = true;
+    }
+
+    if (store.get("wallpaperScopedSettingsInitialized") !== true) {
+        store.set("wallpaperScopedSettingsInitialized", true);
+        changed = true;
+    }
+    if (store.get("wallpaperScopedSettingsVersion") !== WALLPAPER_SCOPED_SETTINGS_VERSION) {
+        store.set("wallpaperScopedSettingsVersion", WALLPAPER_SCOPED_SETTINGS_VERSION);
+        changed = true;
+    }
+
+    if (changed) {
+        logLifecycle("wallpaperScopedSettings:initialized", {
+            fromLegacyScreensaverSettings: true,
+            version: WALLPAPER_SCOPED_SETTINGS_VERSION
+        });
+    }
 }
 
 function getDefaultVideoProfile() {
@@ -1015,6 +1120,8 @@ function buildDiagnosticsText() {
 //initialize variables
 let screens = [];
 let screenIds = [];
+let wallpaperWindows = [];
+let wallpaperScreenIds = [];
 let nq = false;
 let cachePath = path.join(app.getPath('userData'), "videos");
 let downloading = false;
@@ -1070,6 +1177,14 @@ let exitingScreensaverWindows = false;
 let launchScreensaverBusy = false;
 let fullscreenCheckInProgress = false;
 let foregroundFullscreenCache = {value: false, checkedAt: 0};
+let anyFullscreenCheckInProgress = false;
+let wallpaperCoveredDisplaysCache = {value: new Set(), checkedAt: 0};
+let mediaPlaybackCheckInProgress = false;
+let mediaPlaybackCache = {value: null, checkedAt: 0};
+let lastLoggedMediaPlaybackSignature = "";
+let wallpaperRefreshTimeout = null;
+let wallpaperAutoStartTimeout = null;
+let latestWallpaperPlaybackState = null;
 let trayWindow = null;
 let trayIcon = null;
 let startTime = new Date();
@@ -1156,6 +1271,7 @@ $result = @{
   top = $rect.Top
   right = $rect.Right
   bottom = $rect.Bottom
+  processId = $pid
   processName = $processName
 }
 $result | ConvertTo-Json -Compress
@@ -1202,6 +1318,261 @@ function isRectFullscreenOnAnyDisplay(rect) {
     return false;
 }
 
+function getRectArea(rect) {
+    if (!rect) {
+        return 0;
+    }
+    const width = Math.max(0, rect.right - rect.left);
+    const height = Math.max(0, rect.bottom - rect.top);
+    return width * height;
+}
+
+function getIntersectionArea(rect, bounds) {
+    if (!rect || !bounds) {
+        return 0;
+    }
+    const left = Math.max(rect.left, bounds.x);
+    const top = Math.max(rect.top, bounds.y);
+    const right = Math.min(rect.right, bounds.x + bounds.width);
+    const bottom = Math.min(rect.bottom, bounds.y + bounds.height);
+    return Math.max(0, right - left) * Math.max(0, bottom - top);
+}
+
+function getRectIntersection(rect, bounds) {
+    if (!rect || !bounds) {
+        return null;
+    }
+    const left = Math.max(rect.left, bounds.x);
+    const top = Math.max(rect.top, bounds.y);
+    const right = Math.min(rect.right, bounds.x + bounds.width);
+    const bottom = Math.min(rect.bottom, bounds.y + bounds.height);
+    if (right <= left || bottom <= top) {
+        return null;
+    }
+    return {left, top, right, bottom};
+}
+
+function getUnionArea(rects) {
+    const normalizedRects = rects.filter((rect) => getRectArea(rect) > 0);
+    if (normalizedRects.length === 0) {
+        return 0;
+    }
+
+    const xEdges = Array.from(new Set(normalizedRects.flatMap((rect) => [rect.left, rect.right]))).sort((a, b) => a - b);
+    let area = 0;
+    for (let i = 0; i < xEdges.length - 1; i++) {
+        const left = xEdges[i];
+        const right = xEdges[i + 1];
+        if (right <= left) {
+            continue;
+        }
+
+        const yRanges = normalizedRects
+            .filter((rect) => rect.left < right && rect.right > left)
+            .map((rect) => [rect.top, rect.bottom])
+            .sort((a, b) => a[0] - b[0]);
+        if (yRanges.length === 0) {
+            continue;
+        }
+
+        let coveredHeight = 0;
+        let [currentTop, currentBottom] = yRanges[0];
+        for (let j = 1; j < yRanges.length; j++) {
+            const [top, bottom] = yRanges[j];
+            if (top <= currentBottom) {
+                currentBottom = Math.max(currentBottom, bottom);
+            } else {
+                coveredHeight += currentBottom - currentTop;
+                currentTop = top;
+                currentBottom = bottom;
+            }
+        }
+        coveredHeight += currentBottom - currentTop;
+        area += (right - left) * coveredHeight;
+    }
+    return area;
+}
+
+function getBestDisplayForRect(rect) {
+    let bestDisplay = null;
+    let bestArea = 0;
+    for (const display of screen.getAllDisplays()) {
+        const boundsArea = getIntersectionArea(rect, display.bounds);
+        const workArea = getIntersectionArea(rect, display.workArea);
+        const area = Math.max(boundsArea, workArea);
+        if (area > bestArea) {
+            bestArea = area;
+            bestDisplay = display;
+        }
+    }
+    return bestDisplay;
+}
+
+function getFullscreenDisplayIdsForRect(rect) {
+    if (!rect) {
+        return [];
+    }
+    const tolerance = 4;
+    const width = rect.right - rect.left;
+    const height = rect.bottom - rect.top;
+    if (width <= 0 || height <= 0) {
+        return [];
+    }
+    const displayIds = [];
+    for (const display of screen.getAllDisplays()) {
+        const bounds = display.bounds;
+        const matchesX = Math.abs(rect.left - bounds.x) <= tolerance;
+        const matchesY = Math.abs(rect.top - bounds.y) <= tolerance;
+        const matchesWidth = Math.abs(width - bounds.width) <= tolerance;
+        const matchesHeight = Math.abs(height - bounds.height) <= tolerance;
+        if (matchesX && matchesY && matchesWidth && matchesHeight) {
+            displayIds.push(display.id);
+        }
+    }
+    return displayIds;
+}
+
+function isClientRectFullscreenOnAnyDisplay(rect) {
+    if (!rect) {
+        return false;
+    }
+    return isRectFullscreenOnAnyDisplay({
+        left: rect.clientLeft,
+        top: rect.clientTop,
+        right: rect.clientRight,
+        bottom: rect.clientBottom
+    });
+}
+
+function isLikelyRealAppWindow(rect) {
+    if (!rect) {
+        return false;
+    }
+    if (!String(rect.title ?? "").trim() && !String(rect.className ?? "").trim()) {
+        return false;
+    }
+    const style = Number(rect.style ?? 0);
+    const exStyle = Number(rect.exStyle ?? 0);
+    const WS_CHILD = 0x40000000;
+    const WS_DISABLED = 0x08000000;
+    const WS_EX_NOACTIVATE = 0x08000000;
+    if ((style & WS_CHILD) !== 0 || (style & WS_DISABLED) !== 0 || (exStyle & WS_EX_NOACTIVATE) !== 0) {
+        return false;
+    }
+    return true;
+}
+
+function isWindowLikelyFullscreenApp(rect) {
+    if (isIgnoredFullscreenWindow(rect) || !isLikelyRealAppWindow(rect)) {
+        return false;
+    }
+    const style = Number(rect.style ?? 0);
+    const WS_CAPTION = 0x00C00000;
+    const WS_THICKFRAME = 0x00040000;
+    const hasWindowChrome = (style & WS_CAPTION) !== 0 || (style & WS_THICKFRAME) !== 0;
+    if (hasWindowChrome) {
+        return false;
+    }
+    return isRectFullscreenOnAnyDisplay(rect) || isClientRectFullscreenOnAnyDisplay(rect);
+}
+
+function getCoveredDisplayIdsForWindow(rect) {
+    if (isIgnoredFullscreenWindow(rect) || !isLikelyRealAppWindow(rect)) {
+        return [];
+    }
+
+    const fullscreenDisplayIds = new Set([
+        ...getFullscreenDisplayIdsForRect(rect),
+        ...getFullscreenDisplayIdsForRect({
+            left: rect.clientLeft,
+            top: rect.clientTop,
+            right: rect.clientRight,
+            bottom: rect.clientBottom
+        })
+    ]);
+    if (fullscreenDisplayIds.size > 0) {
+        return Array.from(fullscreenDisplayIds);
+    }
+
+    if (!rect.isMaximized) {
+        return [];
+    }
+
+    const bestDisplay = getBestDisplayForRect(rect);
+    if (!bestDisplay) {
+        return [];
+    }
+
+    const rectArea = getRectArea(rect);
+    const workAreaCoverage = getIntersectionArea(rect, bestDisplay.workArea) / Math.max(1, bestDisplay.workArea.width * bestDisplay.workArea.height);
+    const windowOnDisplayCoverage = getIntersectionArea(rect, bestDisplay.bounds) / Math.max(1, rectArea);
+    if (workAreaCoverage >= 0.85 && windowOnDisplayCoverage >= 0.85) {
+        return [bestDisplay.id];
+    }
+    return [];
+}
+
+function isWallpaperOccludingWindow(rect) {
+    if (isIgnoredFullscreenWindow(rect) || !isLikelyRealAppWindow(rect)) {
+        return false;
+    }
+    const area = getRectArea(rect);
+    if (area < 10000) {
+        return false;
+    }
+    return true;
+}
+
+function getCombinedCoveredDisplayIdsForWindows(rects) {
+    const coveredDisplayIds = [];
+    const occludingRects = rects.filter(isWallpaperOccludingWindow);
+    if (occludingRects.length === 0) {
+        return coveredDisplayIds;
+    }
+
+    for (const display of screen.getAllDisplays()) {
+        const clippedRects = occludingRects
+            .map((rect) => getRectIntersection(rect, display.workArea))
+            .filter(Boolean);
+        const displayArea = Math.max(1, display.workArea.width * display.workArea.height);
+        const coverage = getUnionArea(clippedRects) / displayArea;
+        if (coverage >= WALLPAPER_DISPLAY_COVERAGE_THRESHOLD) {
+            coveredDisplayIds.push({
+                displayId: display.id,
+                coverage
+            });
+        }
+    }
+
+    return coveredDisplayIds;
+}
+
+function isIgnoredFullscreenProcess(processName) {
+    const currentProcessName = path.basename(process.execPath, path.extname(process.execPath)).toLowerCase();
+    const ignoredProcesses = new Set([
+        "aerial",
+        "electron",
+        currentProcessName,
+        "explorer",
+        "shellexperiencehost",
+        "searchhost",
+        "startmenuexperiencehost",
+        "textinputhost",
+        "applicationframehost"
+    ]);
+    return ignoredProcesses.has(String(processName ?? "").toLowerCase());
+}
+
+function isIgnoredFullscreenWindow(rect) {
+    if (!rect) {
+        return true;
+    }
+    if (Number(rect.processId) === process.pid) {
+        return true;
+    }
+    return isIgnoredFullscreenProcess(rect.processName);
+}
+
 async function isFullscreenAppActive() {
     const now = Date.now();
     if (now - foregroundFullscreenCache.checkedAt < 3000 || fullscreenCheckInProgress) {
@@ -1211,9 +1582,7 @@ async function isFullscreenAppActive() {
     fullscreenCheckInProgress = true;
     try {
         const rect = await getForegroundWindowRect();
-        const processName = rect?.processName?.toLowerCase?.() ?? "";
-        const ignoredProcesses = new Set(["explorer", "shellexperiencehost", "searchhost", "startmenuexperiencehost", "aerial"]);
-        if (ignoredProcesses.has(processName)) {
+        if (isIgnoredFullscreenWindow(rect)) {
             foregroundFullscreenCache = {value: false, checkedAt: now};
             return false;
         }
@@ -1226,6 +1595,629 @@ async function isFullscreenAppActive() {
     } finally {
         fullscreenCheckInProgress = false;
     }
+}
+
+function getVisibleWindowRects() {
+    return new Promise((resolve) => {
+        const script = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public class AerialWinApiEnum {
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+    [DllImport("user32.dll")]
+    public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")]
+    public static extern bool GetClientRect(IntPtr hWnd, out RECT rect);
+    [DllImport("user32.dll")]
+    public static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+    [DllImport("user32.dll")]
+    public static extern bool IsZoomed(IntPtr hWnd);
+    [DllImport("user32.dll")]
+    public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetWindow(IntPtr hWnd, uint uCmd);
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetShellWindow();
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr GetWindowLongPtr(IntPtr hWnd, int nIndex);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowTextLength(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+    [DllImport("dwmapi.dll")]
+    public static extern int DwmGetWindowAttribute(IntPtr hwnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT {
+        public int X;
+        public int Y;
+    }
+}
+'@
+$windows = New-Object System.Collections.Generic.List[object]
+$shellWindow = [AerialWinApiEnum]::GetShellWindow()
+$callback = [AerialWinApiEnum+EnumWindowsProc]{
+  param([IntPtr]$hwnd, [IntPtr]$lParam)
+  if ($hwnd -eq $shellWindow) { return $true }
+  if (-not [AerialWinApiEnum]::IsWindowVisible($hwnd)) { return $true }
+  $owner = [AerialWinApiEnum]::GetWindow($hwnd, 4)
+  if ($owner -ne [IntPtr]::Zero) { return $true }
+  $exStyle = [AerialWinApiEnum]::GetWindowLongPtr($hwnd, -20).ToInt64()
+  if (($exStyle -band 0x80) -ne 0) { return $true }
+  $cloaked = 0
+  try {
+    [AerialWinApiEnum]::DwmGetWindowAttribute($hwnd, 14, [ref]$cloaked, 4) | Out-Null
+    if ($cloaked -ne 0) { return $true }
+  } catch {}
+  $rect = New-Object AerialWinApiEnum+RECT
+  if (-not [AerialWinApiEnum]::GetWindowRect($hwnd, [ref]$rect)) { return $true }
+  $client = New-Object AerialWinApiEnum+RECT
+  [AerialWinApiEnum]::GetClientRect($hwnd, [ref]$client) | Out-Null
+  $clientPoint = New-Object AerialWinApiEnum+POINT
+  $clientPoint.X = 0
+  $clientPoint.Y = 0
+  [AerialWinApiEnum]::ClientToScreen($hwnd, [ref]$clientPoint) | Out-Null
+  $width = $rect.Right - $rect.Left
+  $height = $rect.Bottom - $rect.Top
+  if ($width -le 0 -or $height -le 0) { return $true }
+  $titleBuilder = New-Object System.Text.StringBuilder ([Math]::Max(1, [AerialWinApiEnum]::GetWindowTextLength($hwnd) + 1))
+  [AerialWinApiEnum]::GetWindowText($hwnd, $titleBuilder, $titleBuilder.Capacity) | Out-Null
+  $classBuilder = New-Object System.Text.StringBuilder 256
+  [AerialWinApiEnum]::GetClassName($hwnd, $classBuilder, $classBuilder.Capacity) | Out-Null
+  $pid = 0
+  [AerialWinApiEnum]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
+  $processName = ""
+  try {
+    $processName = (Get-Process -Id $pid -ErrorAction Stop).ProcessName
+  } catch {}
+  $windows.Add([pscustomobject]@{
+    left = $rect.Left
+    top = $rect.Top
+    right = $rect.Right
+    bottom = $rect.Bottom
+    clientLeft = $clientPoint.X
+    clientTop = $clientPoint.Y
+    clientRight = $clientPoint.X + ($client.Right - $client.Left)
+    clientBottom = $clientPoint.Y + ($client.Bottom - $client.Top)
+    style = [AerialWinApiEnum]::GetWindowLongPtr($hwnd, -16).ToInt64()
+    exStyle = $exStyle
+    processId = $pid
+    processName = $processName
+    title = $titleBuilder.ToString()
+    className = $classBuilder.ToString()
+    isMaximized = [AerialWinApiEnum]::IsZoomed($hwnd)
+  }) | Out-Null
+  return $true
+}
+[AerialWinApiEnum]::EnumWindows($callback, [IntPtr]::Zero) | Out-Null
+$windows | ConvertTo-Json -Compress
+`.trim();
+
+        execFile("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+            timeout: 2000,
+            windowsHide: true
+        }, (error, stdout) => {
+            if (error || !stdout) {
+                resolve([]);
+                return;
+            }
+            try {
+                const parsed = JSON.parse(stdout.trim());
+                resolve(Array.isArray(parsed) ? parsed : [parsed]);
+            } catch {
+                resolve([]);
+            }
+        });
+    });
+}
+
+async function getWallpaperCoveredDisplayIds() {
+    const now = Date.now();
+    if (now - wallpaperCoveredDisplaysCache.checkedAt < 1500 || anyFullscreenCheckInProgress) {
+        return wallpaperCoveredDisplaysCache.value;
+    }
+
+    anyFullscreenCheckInProgress = true;
+    try {
+        const rects = await getVisibleWindowRects();
+        const coveredDisplayIds = new Set();
+        const blockingWindows = [];
+        const slowCoveredDisplays = Boolean(store.get("slowWallpaperWhenFullscreenAppActive"));
+        const slowAllDisplaysForFullscreen = Boolean(store.get("slowAllWallpaperWhenAnyFullscreenAppActive"));
+        const fullscreenWindows = slowAllDisplaysForFullscreen
+            ? rects.filter(isWindowLikelyFullscreenApp)
+            : [];
+
+        if (fullscreenWindows.length > 0) {
+            for (const display of screen.getAllDisplays()) {
+                coveredDisplayIds.add(display.id);
+            }
+        }
+
+        if (slowCoveredDisplays) {
+            for (const rect of rects) {
+                const rectDisplayIds = getCoveredDisplayIdsForWindow(rect);
+                if (rectDisplayIds.length === 0) {
+                    continue;
+                }
+                for (const displayId of rectDisplayIds) {
+                    coveredDisplayIds.add(displayId);
+                }
+                blockingWindows.push({rect, displayIds: rectDisplayIds});
+            }
+            const combinedCoveredDisplays = getCombinedCoveredDisplayIdsForWindows(rects);
+            for (const {displayId} of combinedCoveredDisplays) {
+                coveredDisplayIds.add(displayId);
+            }
+            wallpaperCoveredDisplaysCache = {value: coveredDisplayIds, checkedAt: now};
+            if ((blockingWindows.length > 0 || combinedCoveredDisplays.length > 0 || fullscreenWindows.length > 0) && store.get("debugPlayback")) {
+                logLifecycle("wallpaperOcclusion:covered-displays", {
+                    displayIds: Array.from(coveredDisplayIds),
+                    fullscreenPauseAllDisplays: fullscreenWindows.length > 0,
+                    combinedCoverage: combinedCoveredDisplays.map(({displayId, coverage}) => ({
+                        displayId,
+                        coverage: Number(coverage.toFixed(4))
+                    })),
+                    windows: blockingWindows.map(({rect, displayIds}) => ({
+                        displayIds,
+                        processName: rect.processName ?? "",
+                        processId: rect.processId ?? 0,
+                        className: rect.className ?? "",
+                        title: rect.title ?? "",
+                        isMaximized: Boolean(rect.isMaximized),
+                        rect: `${rect.left},${rect.top},${rect.right},${rect.bottom}`,
+                        clientRect: `${rect.clientLeft},${rect.clientTop},${rect.clientRight},${rect.clientBottom}`,
+                        style: rect.style ?? 0,
+                        exStyle: rect.exStyle ?? 0
+                    })),
+                    fullscreenWindows: fullscreenWindows.map((rect) => ({
+                        processName: rect.processName ?? "",
+                        processId: rect.processId ?? 0,
+                        className: rect.className ?? "",
+                        title: rect.title ?? "",
+                        rect: `${rect.left},${rect.top},${rect.right},${rect.bottom}`,
+                        clientRect: `${rect.clientLeft},${rect.clientTop},${rect.clientRight},${rect.clientBottom}`
+                    }))
+                });
+            }
+            return coveredDisplayIds;
+        }
+
+        wallpaperCoveredDisplaysCache = {value: coveredDisplayIds, checkedAt: now};
+        if (fullscreenWindows.length > 0 && store.get("debugPlayback")) {
+            logLifecycle("wallpaperOcclusion:covered-displays", {
+                displayIds: Array.from(coveredDisplayIds),
+                fullscreenPauseAllDisplays: true,
+                fullscreenWindows: fullscreenWindows.map((rect) => ({
+                    processName: rect.processName ?? "",
+                    processId: rect.processId ?? 0,
+                    className: rect.className ?? "",
+                    title: rect.title ?? "",
+                    rect: `${rect.left},${rect.top},${rect.right},${rect.bottom}`,
+                    clientRect: `${rect.clientLeft},${rect.clientTop},${rect.clientRight},${rect.clientBottom}`
+                }))
+            });
+        }
+        return coveredDisplayIds;
+    } catch {
+        wallpaperCoveredDisplaysCache = {value: new Set(), checkedAt: now};
+        return wallpaperCoveredDisplaysCache.value;
+    } finally {
+        anyFullscreenCheckInProgress = false;
+    }
+}
+
+function updateWallpaperFullscreenSlowdown(coveredDisplayIds = new Set()) {
+    const coveredIds = coveredDisplayIds instanceof Set
+        ? coveredDisplayIds
+        : new Set(Array.isArray(coveredDisplayIds) ? coveredDisplayIds : []);
+    for (const win of wallpaperWindows) {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('wallpaperFullscreenState', coveredIds.has(win.aerialWallpaperDisplayId));
+        }
+    }
+}
+
+function getMediaHelperPath() {
+    if (process.platform !== "win32") {
+        return null;
+    }
+    if (app.isPackaged) {
+        return path.join(process.resourcesPath, MEDIA_HELPER_RESOURCE_PATH);
+    }
+    return path.join(__dirname, "build", MEDIA_HELPER_RESOURCE_PATH);
+}
+
+function runMediaHelper(command = "status", args = []) {
+    return new Promise((resolve) => {
+        const helperPath = getMediaHelperPath();
+        if (!helperPath || !fs.existsSync(helperPath)) {
+            resolve({
+                supported: false,
+                error: "missing-helper",
+                message: "The native media helper is not available."
+            });
+            return;
+        }
+
+        execFile(helperPath, [command, ...args.map((arg) => String(arg))], {
+            timeout: 2000,
+            windowsHide: true
+        }, (error, stdout) => {
+            if (stdout) {
+                try {
+                    resolve(JSON.parse(stdout.trim()));
+                    return;
+                } catch (parseError) {
+                    resolve({
+                        supported: false,
+                        error: "invalid-helper-json",
+                        message: parseError?.message ?? "The native media helper returned invalid JSON."
+                    });
+                    return;
+                }
+            }
+            if (error) {
+                resolve({
+                    supported: false,
+                    error: error?.code ?? "helper-failed",
+                    message: error?.message ?? "The native media helper did not return a result."
+                });
+                return;
+            }
+            resolve({
+                supported: false,
+                error: "empty-helper-output",
+                message: "The native media helper did not return a result."
+            });
+        });
+    });
+}
+
+function attachWindowToWallpaperHost(win) {
+    return new Promise((resolve) => {
+        if (process.platform !== "win32") {
+            resolve({success: false, error: "Wallpaper mode is only supported on Windows."});
+            return;
+        }
+        if (!win || win.isDestroyed()) {
+            resolve({success: false, error: "Wallpaper window is not available."});
+            return;
+        }
+        const handleBuffer = win.getNativeWindowHandle();
+        const handle = process.arch === "x64"
+            ? handleBuffer.readBigUInt64LE(0).toString()
+            : String(handleBuffer.readUInt32LE(0));
+        runMediaHelper("attach-wallpaper", [handle]).then(resolve);
+    });
+}
+
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function attachWindowToWallpaperHostWithRetry(win, displayId) {
+    let lastAttachResult = {success: false, error: "Wallpaper attach was not attempted."};
+    for (let attempt = 1; attempt <= WALLPAPER_ATTACH_MAX_ATTEMPTS; attempt++) {
+        if (!win || win.isDestroyed()) {
+            return {success: false, error: "Wallpaper window was closed before attach could finish."};
+        }
+
+        lastAttachResult = await attachWindowToWallpaperHost(win);
+        logLifecycle("createWallpaperWindows:attach", {
+            displayId,
+            attempt,
+            maxAttempts: WALLPAPER_ATTACH_MAX_ATTEMPTS,
+            ...lastAttachResult
+        });
+
+        if (lastAttachResult?.success === true) {
+            return lastAttachResult;
+        }
+
+        if (attempt < WALLPAPER_ATTACH_MAX_ATTEMPTS) {
+            await wait(WALLPAPER_ATTACH_RETRY_DELAY_MS);
+        }
+    }
+
+    logLifecycle("createWallpaperWindows:attach-failed", {
+        displayId,
+        attempts: WALLPAPER_ATTACH_MAX_ATTEMPTS,
+        ...lastAttachResult
+    });
+    return lastAttachResult;
+}
+
+function isWallpaperScopedConfigKey(key) {
+    return typeof key === "string" && (
+        key === "wallpaperAllowedVideos" ||
+        key === "wallpaperDisplayText" ||
+        key === "wallpaperPlaybackSpeed" ||
+        key === "wallpaperVideoFilters" ||
+        key === "wallpaperRandomSpeed" ||
+        key.startsWith("wallpaperText")
+    );
+}
+
+function scheduleWallpaperRefresh(reason = "config-change") {
+    if (wallpaperWindows.length === 0) {
+        return;
+    }
+    if (wallpaperRefreshTimeout) {
+        clearTimeout(wallpaperRefreshTimeout);
+    }
+    wallpaperRefreshTimeout = setTimeout(() => {
+        wallpaperRefreshTimeout = null;
+        const openWindows = wallpaperWindows.filter((win) => win && !win.isDestroyed());
+        logLifecycle("wallpaper:refresh", {
+            reason,
+            windows: openWindows.length
+        });
+        for (const win of openWindows) {
+            loadWallpaperWindow(win);
+        }
+    }, 1000);
+}
+
+function cancelScheduledWallpaperAutoStart() {
+    if (!wallpaperAutoStartTimeout) {
+        return;
+    }
+    clearTimeout(wallpaperAutoStartTimeout);
+    wallpaperAutoStartTimeout = null;
+}
+
+function canAutoStartWallpaper() {
+    return Boolean(
+        store &&
+        store.get('useTray') &&
+        store.get('startWallpaperOnStartup') &&
+        !launchedAsScreensaverSession &&
+        !isAppQuitting &&
+        !isComputerSuspendedOrLocked
+    );
+}
+
+function ensureWallpaperAutoStart(reason = "auto-start") {
+    wallpaperAutoStartTimeout = null;
+    const liveWallpaperEntries = wallpaperWindows
+        .map((win, index) => ({win, displayId: wallpaperScreenIds[index]}))
+        .filter(({win}) => win && !win.isDestroyed());
+    const liveWallpaperWindows = liveWallpaperEntries.map(({win}) => win);
+    if (liveWallpaperWindows.length !== wallpaperWindows.length) {
+        wallpaperWindows = liveWallpaperWindows;
+        wallpaperScreenIds = liveWallpaperEntries.map(({displayId}) => displayId);
+    }
+    if (!canAutoStartWallpaper()) {
+        logLifecycle("wallpaper:auto-start-skipped", {
+            reason,
+            useTray: store?.get('useTray'),
+            startWallpaperOnStartup: store?.get('startWallpaperOnStartup'),
+            launchedAsScreensaverSession,
+            isAppQuitting,
+            isComputerSuspendedOrLocked
+        });
+        return;
+    }
+    if (wallpaperWindows.length > 0 || screens.length > 0) {
+        logLifecycle("wallpaper:auto-start-skipped", {
+            reason,
+            wallpaperWindows: wallpaperWindows.length,
+            screens: screens.length
+        });
+        return;
+    }
+    logLifecycle("wallpaper:auto-start", {reason});
+    createWallpaperWindows();
+}
+
+function scheduleWallpaperAutoStart(reason = "auto-start", delayMs = WALLPAPER_AUTOSTART_DELAY_MS) {
+    cancelScheduledWallpaperAutoStart();
+    wallpaperAutoStartTimeout = setTimeout(() => {
+        ensureWallpaperAutoStart(reason);
+    }, delayMs);
+}
+
+function handleWallpaperDisplayChange(reason) {
+    store.set('numDisplays', screen.getAllDisplays().length);
+    const hadWallpaper = wallpaperWindows.some((win) => win && !win.isDestroyed());
+    logLifecycle("wallpaper:display-change", {
+        reason,
+        hadWallpaper,
+        displays: screen.getAllDisplays().length
+    });
+    if (!hadWallpaper) {
+        scheduleWallpaperAutoStart(reason);
+        return;
+    }
+    closeWallpaperWindows();
+    cancelScheduledWallpaperAutoStart();
+    wallpaperAutoStartTimeout = setTimeout(() => {
+        wallpaperAutoStartTimeout = null;
+        if (isAppQuitting || launchedAsScreensaverSession || isComputerSuspendedOrLocked || screens.length > 0) {
+            logLifecycle("wallpaper:display-change-restart-skipped", {
+                reason,
+                isAppQuitting,
+                launchedAsScreensaverSession,
+                isComputerSuspendedOrLocked,
+                screens: screens.length
+            });
+            return;
+        }
+        createWallpaperWindows();
+    }, WALLPAPER_AUTOSTART_DELAY_MS);
+}
+
+function loadWallpaperWindow(win) {
+    if (!win || win.isDestroyed()) {
+        return;
+    }
+    const screenIndex = Number(win.aerialWallpaperScreenNumber ?? 0);
+    if (!win.aerialRenderWallpaper) {
+        win.loadFile('web/black.html');
+        return;
+    }
+    win.loadFile('web/screensaver.html', {query: {mode: "wallpaper"}});
+    win.webContents.once('did-finish-load', () => {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('screenNumber', screenIndex);
+            win.webContents.send('screensaverVisible');
+        }
+    });
+}
+
+function getWallpaperPlaybackResumeState() {
+    if (!store.get("syncScreensaverToWallpaper")) {
+        return null;
+    }
+    if (!latestWallpaperPlaybackState?.videoId) {
+        return null;
+    }
+    const updatedAt = Number(latestWallpaperPlaybackState.updatedAt ?? 0);
+    if (!Number.isFinite(updatedAt) || Date.now() - updatedAt > 15000) {
+        return null;
+    }
+    return {
+        videoId: latestWallpaperPlaybackState.videoId,
+        currentTime: Math.max(0, Number(latestWallpaperPlaybackState.currentTime) || 0)
+    };
+}
+
+function getScreensaverAllowedVideos() {
+    if (store.get("syncScreensaverToWallpaper") && wallpaperWindows.length > 0) {
+        return store.get("wallpaperAllowedVideos") ?? store.get("allowedVideos");
+    }
+    return store.get("allowedVideos");
+}
+
+function buildScreensaverLoadOptions(startMode, resumeState) {
+    const query = {};
+    if (startMode === "minimal") {
+        query.startMode = startMode;
+    }
+    if (resumeState?.videoId) {
+        query.resumeVideoId = resumeState.videoId;
+        query.resumeTime = String(resumeState.currentTime ?? 0);
+    }
+    return Object.keys(query).length > 0 ? {query} : undefined;
+}
+
+async function getMediaPlaybackStatus() {
+    const now = Date.now();
+    if (now - mediaPlaybackCache.checkedAt < 3000 || mediaPlaybackCheckInProgress) {
+        return mediaPlaybackCache.value ?? {supported: false, sessions: []};
+    }
+
+    mediaPlaybackCheckInProgress = true;
+    try {
+        const status = await runMediaHelper("status");
+        mediaPlaybackCache = {value: status, checkedAt: now};
+        return status;
+    } catch (error) {
+        const status = {
+            supported: false,
+            error: "media-status-error",
+            message: error?.message ?? String(error),
+            sessions: []
+        };
+        mediaPlaybackCache = {value: status, checkedAt: now};
+        return status;
+    } finally {
+        mediaPlaybackCheckInProgress = false;
+    }
+}
+
+function isLikelyBrowserMediaSession(session) {
+    const source = String(session?.sourceAppUserModelId ?? "").toLowerCase();
+    return [
+        "chrome",
+        "msedge",
+        "firefox",
+        "brave",
+        "vivaldi",
+        "opera",
+        "comet",
+        "chromium"
+    ].some((browserId) => source.includes(browserId));
+}
+
+function summarizeMediaPlaybackStatus(status) {
+    const sessions = Array.isArray(status?.sessions) ? status.sessions : [];
+    return {
+        supported: Boolean(status?.supported),
+        error: status?.error ?? "",
+        sessionCount: status?.sessionCount ?? sessions.length,
+        hasPlayingVideo: Boolean(status?.hasPlayingVideo),
+        hasPlayingAudio: Boolean(status?.hasPlayingAudio),
+        hasUnknownPlayingMedia: Boolean(status?.hasUnknownPlayingMedia),
+        sessions: sessions.map((session) => ({
+            sourceAppUserModelId: session.sourceAppUserModelId ?? "",
+            isCurrent: Boolean(session.isCurrent),
+            playbackStatus: session.playbackStatus ?? "",
+            playbackType: session.playbackType ?? "",
+            isPlaying: Boolean(session.isPlaying),
+            title: session.title ?? "",
+            artist: session.artist ?? "",
+            albumTitle: session.albumTitle ?? "",
+            controls: session.controls ?? {}
+        }))
+    };
+}
+
+function logMediaPlaybackStatus(eventName, status, extraDetails = {}) {
+    const summary = {
+        ...summarizeMediaPlaybackStatus(status),
+        ...extraDetails
+    };
+    const signature = JSON.stringify(summary);
+    if (signature === lastLoggedMediaPlaybackSignature && !extraDetails.forceLog) {
+        return;
+    }
+    lastLoggedMediaPlaybackSignature = signature;
+    logLifecycle(eventName, summary);
+}
+
+function isBlockingVideoMediaSession(session) {
+    if (!session?.isPlaying) {
+        return false;
+    }
+    const playbackType = String(session.playbackType ?? "").toLowerCase();
+    if (playbackType === "video") {
+        return true;
+    }
+    return isLikelyBrowserMediaSession(session);
+}
+
+function getBlockingVideoMediaSessions(status) {
+    const sessions = Array.isArray(status?.sessions) ? status.sessions : [];
+    return sessions.filter(isBlockingVideoMediaSession);
+}
+
+async function isVideoPlaybackActive() {
+    const status = await getMediaPlaybackStatus();
+    const blockingSessions = getBlockingVideoMediaSessions(status);
+    const isBlocking = blockingSessions.length > 0;
+    if (store.get("debugPlayback") || isBlocking) {
+        logMediaPlaybackStatus("mediaPlayback:status", status, {
+            blockingVideoPlayback: isBlocking,
+            blockingSources: blockingSessions.map((session) => session.sourceAppUserModelId ?? "")
+        });
+    }
+    return isBlocking;
 }
 
 //window creation code
@@ -1335,10 +2327,11 @@ function createSSWindow(argv, options = {}) {
             }
         }
     }
-    allowedVideos = store.get("allowedVideos");
+    allowedVideos = getScreensaverAllowedVideos();
     calculateAstronomy();
     previouslyPlayed = [];
     resetPlaybackHistory();
+    const resumeState = getWallpaperPlaybackResumeState();
     let displays = screen.getAllDisplays();
     store.set('numDisplays', displays.length);
     for (let i = 0; i < displays.length; i++) {
@@ -1367,10 +2360,7 @@ function createSSWindow(argv, options = {}) {
         if (!renderScreensaver) {
             win.loadFile('web/black.html');
         } else {
-            const loadOptions = startMode === "minimal"
-                ? {query: {startMode}}
-                : undefined;
-            win.loadFile('web/screensaver.html', loadOptions);
+            win.loadFile('web/screensaver.html', buildScreensaverLoadOptions(startMode, resumeState));
             win.webContents.once('did-finish-load', () => {
                 win.webContents.send('screenNumber', i);
             });
@@ -1418,9 +2408,10 @@ function createSSWindow(argv, options = {}) {
 function createSSPWindow(argv, options = {}) {
     const startMode = options.startMode === "minimal" ? "minimal" : "normal";
     nq = true;
-    allowedVideos = store.get("allowedVideos");
+    allowedVideos = getScreensaverAllowedVideos();
     previouslyPlayed = [];
     resetPlaybackHistory();
+    const resumeState = getWallpaperPlaybackResumeState();
     let displays = screen.getAllDisplays();
     let win = new BrowserWindow({
         width: 1280,
@@ -1438,10 +2429,7 @@ function createSSPWindow(argv, options = {}) {
         show: false
     });
     applyWindowsAppDetails(win);
-    const loadOptions = startMode === "minimal"
-        ? {query: {startMode}}
-        : undefined;
-    win.loadFile('web/screensaver.html', loadOptions);
+    win.loadFile('web/screensaver.html', buildScreensaverLoadOptions(startMode, resumeState));
     win.webContents.once('did-finish-load', () => {
         win.webContents.send('screenNumber', 0);
     });
@@ -1498,6 +2486,7 @@ function createEditWindow(argv) {
 function createTrayWindow() {
     if (trayWindow && !trayWindow.isDestroyed() && trayIcon) {
         logLifecycle("createTrayWindow:reuse-existing");
+        refreshTrayMenu();
         return;
     }
     logLifecycle("createTrayWindow:create");
@@ -1534,73 +2523,96 @@ function createTrayWindow() {
         }
     });
 
-    function refreshTrayMenu() {
-        if (!trayIcon) {
-            return;
-        }
-        trayIcon.setContextMenu(newMenu());
-    }
-
-    function newMenu() {
-        return Menu.buildFromTemplate([
-            {
-                label: "Open Config", click: (item, window, event) => {
-                    createConfigWindow();
-                }
-            },
-            {type: "separator"},
-            {
-                label: "Start Aerial", click: (item, window, event) => {
-                    createSSWindow();
-                }
-            },
-            {
-                label: suspend ? "Suspend Aerial (ON)" : "Suspend Aerial (OFF)",
-                click: () => {
-                    suspend = !suspend;
-                    clearTimeout(suspendCountdown);
-                    refreshTrayMenu();
-                }
-            },
-            {
-                label: 'Suspend for 1 hour',
-                click: (e) => {
-                    suspend = true;
-                    clearTimeout(suspendCountdown);
-                    refreshTrayMenu();
-                    suspendCountdown = setTimeout(() => {
-                        suspend = false;
-                        refreshTrayMenu();
-                    }, (1000 * 60) + (store.get('startAfter') * 60));
-                }
-            },
-            {
-                label: 'Suspend for 3 hours',
-                click: (e) => {
-                    suspend = true;
-                    clearTimeout(suspendCountdown);
-                    refreshTrayMenu();
-                    suspendCountdown = setTimeout(() => {
-                        suspend = false;
-                        refreshTrayMenu();
-                    }, (1000 * 60 * 3) + (store.get('startAfter') * 60));
-                }
-            },
-            {type: "separator"},
-            {
-                label: "Exit Aerial", click: (item, window, event) => {
-                    logLifecycle("trayMenu:exit-click");
-                    isAppQuitting = true;
-                    app.quit();
-                }
-            },
-        ]);
-    }
-
     trayIcon = new Tray(APP_ICON_PATH);
     refreshTrayMenu();
     trayIcon.setToolTip("Aerial");
     logLifecycle("createTrayWindow:ready");
+}
+
+function refreshTrayMenu() {
+    if (!trayIcon) {
+        return;
+    }
+    trayIcon.setContextMenu(buildTrayMenu());
+}
+
+function buildTrayMenu() {
+    return Menu.buildFromTemplate([
+        {
+            label: "Open Config", click: () => {
+                createConfigWindow();
+            }
+        },
+        {type: "separator"},
+        {
+            label: "Start Aerial", click: () => {
+                createSSWindow();
+            }
+        },
+        {
+            label: wallpaperWindows.length > 0 ? "Stop Wallpaper" : "Start Wallpaper",
+            click: () => {
+                if (wallpaperWindows.length > 0) {
+                    cancelScheduledWallpaperAutoStart();
+                    closeWallpaperWindows();
+                } else {
+                    createWallpaperWindows();
+                }
+                refreshTrayMenu();
+            }
+        },
+        {
+            label: "Next Wallpaper Scene",
+            enabled: wallpaperWindows.length > 0,
+            click: () => {
+                for (const win of wallpaperWindows) {
+                    if (win && !win.isDestroyed()) {
+                        win.webContents.send('newVideo', 'next');
+                    }
+                }
+            }
+        },
+        {
+            label: suspend ? "Suspend Aerial (ON)" : "Suspend Aerial (OFF)",
+            click: () => {
+                suspend = !suspend;
+                clearTimeout(suspendCountdown);
+                refreshTrayMenu();
+            }
+        },
+        {
+            label: 'Suspend for 1 hour',
+            click: () => {
+                suspend = true;
+                clearTimeout(suspendCountdown);
+                refreshTrayMenu();
+                suspendCountdown = setTimeout(() => {
+                    suspend = false;
+                    refreshTrayMenu();
+                }, (1000 * 60) + (store.get('startAfter') * 60));
+            }
+        },
+        {
+            label: 'Suspend for 3 hours',
+            click: () => {
+                suspend = true;
+                clearTimeout(suspendCountdown);
+                refreshTrayMenu();
+                suspendCountdown = setTimeout(() => {
+                    suspend = false;
+                    refreshTrayMenu();
+                }, (1000 * 60 * 3) + (store.get('startAfter') * 60));
+            }
+        },
+        {type: "separator"},
+        {
+            label: "Exit Aerial", click: () => {
+                logLifecycle("trayMenu:exit-click");
+                isAppQuitting = true;
+                app.quit();
+            }
+        },
+    ]);
 }
 
 //start up code
@@ -1684,6 +2696,9 @@ ipcMain.on('store-set-sync', (event, payload) => {
         return;
     }
     store.set(payload.key, payload.value);
+    if (isWallpaperScopedConfigKey(payload.key)) {
+        scheduleWallpaperRefresh(payload.key);
+    }
     event.returnValue = true;
 });
 
@@ -1778,6 +2793,9 @@ function startUp() {
     checkForUpdate();
     setupGlobalShortcut();
     store.set('numDisplays', screen.getAllDisplays().length);
+    screen.on('display-added', () => handleWallpaperDisplayChange("display-added"));
+    screen.on('display-removed', () => handleWallpaperDisplayChange("display-removed"));
+    screen.on('display-metrics-changed', () => handleWallpaperDisplayChange("display-metrics-changed"));
     //configures Aerial to launch on startup
     if (store.get('useTray') && app.isPackaged) {
         autoLauncher.enable();
@@ -1807,6 +2825,7 @@ function startUp() {
     } else {
         if (store.get('useTray')) {
             createTrayWindow();
+            scheduleWallpaperAutoStart("app-launch", 0);
             if (firstTime) {
                 createConfigWindow(["/w"]);
             }
@@ -1851,6 +2870,9 @@ function setUpConfigFile() {
     store.set('lockAfterRunAfter', store.get('lockAfterRunAfter') ?? 15);
     store.set('runOnBattery', store.get('runOnBattery') ?? true);
     store.set('disableWhenFullscreenAppActive', store.get('disableWhenFullscreenAppActive') ?? true);
+    store.set('disableWhenVideoPlaybackActive', store.get('disableWhenVideoPlaybackActive') ?? true);
+    store.set('slowWallpaperWhenFullscreenAppActive', store.get('slowWallpaperWhenFullscreenAppActive') ?? false);
+    store.set('slowAllWallpaperWhenAnyFullscreenAppActive', store.get('slowAllWallpaperWhenAnyFullscreenAppActive') ?? false);
     store.set('updateAvailable', false);
     store.set('latestReleaseVersion', store.get('latestReleaseVersion') ?? app.getVersion());
     store.set('latestReleasePublishedAt', store.get('latestReleasePublishedAt') ?? "");
@@ -1866,6 +2888,12 @@ function setUpConfigFile() {
     store.set('globalShortcutModifier1', store.get('globalShortcutModifier1') ?? "Super");
     store.set('globalShortcutModifier2', store.get('globalShortcutModifier2') ?? "+Control");
     store.set('globalShortcutKey', store.get('globalShortcutKey') ?? "A");
+    store.set('startWallpaperOnStartup', store.get('startWallpaperOnStartup') ?? false);
+    store.set('syncScreensaverToWallpaper', store.get('syncScreensaverToWallpaper') ?? false);
+    store.set('enableWallpaperShortcut', store.get('enableWallpaperShortcut') ?? false);
+    store.set('wallpaperShortcutModifier1', store.get('wallpaperShortcutModifier1') ?? "Super");
+    store.set('wallpaperShortcutModifier2', store.get('wallpaperShortcutModifier2') ?? "+Control");
+    store.set('wallpaperShortcutKey', store.get('wallpaperShortcutKey') ?? "W");
     //playback settings
     store.set('playbackSpeed', store.get('playbackSpeed') ?? 1);
     store.set('skipVideosWithKey', store.get('skipVideosWithKey') ?? true);
@@ -1993,6 +3021,7 @@ function setUpConfigFile() {
     }
     store.set('displayText', displayText);
     store.set('randomSpeed', store.get('randomSpeed') ?? 30);
+    ensureWallpaperScopedSettings(displayText, knownVideoIds);
     store.set('videoQuality', store.get('videoQuality') ?? false);
     store.set('modernTransitions', store.get('modernTransitions') ?? true);
     store.set('fps', store.get('fps') ?? 60);
@@ -2103,6 +3132,94 @@ function checkForUpdate() {
             message: "Unable to check for updates right now."
         });
     });
+}
+
+function createWallpaperWindows() {
+    if (wallpaperWindows.length > 0) {
+        return;
+    }
+    logLifecycle("createWallpaperWindows:start", {
+        windowsCount: wallpaperWindows.length,
+        onlyPrimary: store.get("onlyShowVideoOnPrimaryMonitor")
+    });
+    allowedVideos = store.get("wallpaperAllowedVideos") ?? store.get("allowedVideos");
+    calculateAstronomy();
+    previouslyPlayed = [];
+    resetPlaybackHistory();
+    const displays = screen.getAllDisplays();
+    store.set('numDisplays', displays.length);
+
+    for (let i = 0; i < displays.length; i++) {
+        const display = displays[i];
+        const displayId = display.id;
+        const renderWallpaper = !(store.get("onlyShowVideoOnPrimaryMonitor") && displayId !== screen.getPrimaryDisplay().id);
+        let win = new BrowserWindow({
+            width: display.bounds.width,
+            height: display.bounds.height,
+            x: display.bounds.x,
+            y: display.bounds.y,
+            frame: false,
+            transparent: false,
+            skipTaskbar: true,
+            resizable: false,
+            movable: false,
+            focusable: false,
+            show: false,
+            icon: APP_ICON_PATH,
+            webPreferences: {
+                nodeIntegration: false,
+                contextIsolation: true,
+                enableRemoteModule: false,
+                sandbox: false,
+                preload: path.join(__dirname, "preload.js")
+            }
+        });
+        applyWindowsAppDetails(win);
+        win.aerialWallpaperScreenNumber = i;
+        win.aerialWallpaperDisplayId = displayId;
+        win.aerialRenderWallpaper = renderWallpaper;
+        loadWallpaperWindow(win);
+        win.on('closed', () => {
+            const closedIndex = wallpaperWindows.indexOf(win);
+            if (closedIndex !== -1) {
+                wallpaperWindows.splice(closedIndex, 1);
+            }
+            const screenIdIndex = wallpaperScreenIds.indexOf(displayId);
+            if (screenIdIndex !== -1) {
+                wallpaperScreenIds.splice(screenIdIndex, 1);
+            }
+            logLifecycle("createWallpaperWindows:window-closed", {
+                displayId,
+                remainingWallpaperWindows: wallpaperWindows.length
+            });
+            refreshTrayMenu();
+            win = null;
+        });
+        win.once('ready-to-show', async () => {
+            const attachResult = await attachWindowToWallpaperHostWithRetry(win, displayId);
+            if (!win || win.isDestroyed()) {
+                return;
+            }
+            if (attachResult?.success !== true) {
+                win.close();
+                return;
+            }
+            win.setBounds({
+                x: display.bounds.x,
+                y: display.bounds.y,
+                width: display.bounds.width,
+                height: display.bounds.height
+            });
+            win.showInactive();
+            if (renderWallpaper) {
+                win.webContents.send('screensaverVisible');
+            }
+        });
+        win.setMenu(null);
+        wallpaperWindows.push(win);
+        wallpaperScreenIds.push(displayId);
+    }
+    refreshTrayMenu();
 }
 
 async function startAppUpdateDownload() {
@@ -2232,6 +3349,34 @@ ipcMain.handle('getCacheDiagnostics', () => {
 
 ipcMain.handle('getLogDiagnostics', () => {
     return getLogDiagnostics();
+});
+
+ipcMain.handle('getMediaPlaybackStatus', () => {
+    return getMediaPlaybackStatus();
+});
+
+ipcMain.handle('logMediaPlaybackStatus', async () => {
+    const status = await getMediaPlaybackStatus();
+    const blockingSessions = getBlockingVideoMediaSessions(status);
+    logMediaPlaybackStatus("mediaPlayback:manual-status", status, {
+        forceLog: true,
+        blockingVideoPlayback: blockingSessions.length > 0,
+        blockingSources: blockingSessions.map((session) => session.sourceAppUserModelId ?? "")
+    });
+    return status;
+});
+
+ipcMain.handle('mediaControl', (_event, command) => {
+    const allowedCommands = new Set(["play", "pause", "play-pause", "toggle", "stop", "next", "previous", "prev"]);
+    const normalizedCommand = String(command ?? "").trim().toLowerCase();
+    if (!allowedCommands.has(normalizedCommand)) {
+        return {
+            success: false,
+            command: normalizedCommand,
+            error: "Unsupported media command."
+        };
+    }
+    return runMediaHelper(normalizedCommand);
 });
 
 ipcMain.handle('clearLogs', (_event, target = "all") => {
@@ -2418,6 +3563,23 @@ ipcMain.on('openMinimalPreview', () => {
     enterMinimalMode(true);
 });
 
+ipcMain.on('startWallpaper', () => {
+    createWallpaperWindows();
+});
+
+ipcMain.on('stopWallpaper', () => {
+    cancelScheduledWallpaperAutoStart();
+    closeWallpaperWindows();
+});
+
+ipcMain.on('nextWallpaperScene', () => {
+    for (const win of wallpaperWindows) {
+        if (win && !win.isDestroyed()) {
+            win.webContents.send('newVideo', 'next');
+        }
+    }
+});
+
 ipcMain.on('openInfoEditor', (event) => {
     createEditWindow(process.argv);
 });
@@ -2457,8 +3619,10 @@ ipcMain.handle('newVideoId', (event, payload) => {
     const request = typeof payload === "string" ? {lastPlayed: payload, direction: "next"} : (payload ?? {});
     const lastPlayed = request.lastPlayed ?? "";
     const direction = request.direction ?? "next";
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const isWallpaperRequest = wallpaperWindows.some((win) => win === senderWindow);
 
-    if (currentlyPlaying === '') {
+    if (!isWallpaperRequest && currentlyPlaying === '') {
         onFirstVideoPlayed();
     }
 
@@ -2516,6 +3680,23 @@ ipcMain.on('newGlobalShortcut', (event) => {
     setupGlobalShortcut();
 });
 
+ipcMain.on('wallpaperPlaybackState', (event, state) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!wallpaperWindows.some((win) => win === senderWindow)) {
+        return;
+    }
+    if (!state?.videoId) {
+        return;
+    }
+    latestWallpaperPlaybackState = {
+        videoId: String(state.videoId),
+        currentTime: Math.max(0, Number(state.currentTime) || 0),
+        duration: Math.max(0, Number(state.duration) || 0),
+        screenNumber: Number(state.screenNumber ?? 0),
+        updatedAt: Date.now()
+    };
+});
+
 ipcMain.on('consoleLog', (event, msg) => {
     const line = `${new Date().toISOString()} ${msg}`;
     console.log(line);
@@ -2534,21 +3715,28 @@ powerMonitor.on('resume', () => {
     isComputerSleeping = false;
     isComputerSuspendedOrLocked = false;
     closeAllWindows();
+    closeWallpaperWindows();
+    scheduleWallpaperAutoStart("system-resume");
 });
 
 powerMonitor.on('suspend', () => {
+    cancelScheduledWallpaperAutoStart();
     isComputerSuspendedOrLocked = true;
     closeAllWindows();
+    closeWallpaperWindows();
 });
 
 powerMonitor.on('lock-screen', () => {
+    cancelScheduledWallpaperAutoStart();
     isComputerSuspendedOrLocked = true;
     closeAllWindows();
+    closeWallpaperWindows();
 });
 
 powerMonitor.on('unlock-screen', () => {
     isComputerSuspendedOrLocked = false;
     closeAllWindows();
+    scheduleWallpaperAutoStart("session-unlock");
 });
 
 //let Aerial load the video with Apple's self-signed cert
@@ -2563,10 +3751,26 @@ app.on('certificate-error', (event, webContents, url, error, certificate, callba
 
 function setupGlobalShortcut() {
     globalShortcut.unregisterAll();
+    const screensaverShortcut = `${store.get("globalShortcutModifier1") + store.get("globalShortcutModifier2")}+${store.get("globalShortcutKey")}`;
+    const wallpaperShortcut = `${store.get("wallpaperShortcutModifier1") + store.get("wallpaperShortcutModifier2")}+${store.get("wallpaperShortcutKey")}`;
     if (store.get("enableGlobalShortcut")) {
-        globalShortcut.register(`${store.get("globalShortcutModifier1") + store.get("globalShortcutModifier2")}+${store.get("globalShortcutKey")}`, () => {
+        globalShortcut.register(screensaverShortcut, () => {
             createSSWindow();
-        })
+        });
+    }
+    if (store.get("enableWallpaperShortcut")) {
+        if (store.get("enableGlobalShortcut") && wallpaperShortcut === screensaverShortcut) {
+            logLifecycle("globalShortcut:wallpaper-conflict", {shortcut: wallpaperShortcut});
+            return;
+        }
+        globalShortcut.register(wallpaperShortcut, () => {
+            if (wallpaperWindows.length > 0) {
+                cancelScheduledWallpaperAutoStart();
+                closeWallpaperWindows();
+            } else {
+                createWallpaperWindows();
+            }
+        });
     }
 }
 
@@ -2861,6 +4065,22 @@ function closeAllWindows() {
     logLifecycle("closeAllWindows:done");
 }
 
+function closeWallpaperWindows() {
+    logLifecycle("closeWallpaperWindows:start", {trackedWallpaperWindows: wallpaperWindows.length});
+    const windowsToClose = wallpaperWindows.slice();
+    for (const wallpaperWindow of windowsToClose) {
+        if (!wallpaperWindow || wallpaperWindow.isDestroyed()) {
+            continue;
+        }
+        wallpaperWindow.close();
+    }
+    wallpaperWindows = [];
+    wallpaperScreenIds = [];
+    latestWallpaperPlaybackState = null;
+    logLifecycle("closeWallpaperWindows:done");
+    refreshTrayMenu();
+}
+
 function sleepComputer() {
     if (preview) {
         return
@@ -2886,7 +4106,7 @@ async function launchScreensaver() {
     let startAfter = store.get('startAfter');
     try {
         //console.log(screens.length,powerMonitor.getSystemIdleTime(),store.get('startAfter') * 60)
-        if (screens.length === 0 && !suspend && !isComputerSleeping && !isComputerSuspendedOrLocked && startAfter > 0) {
+        if (screens.length === 0 && wallpaperWindows.length === 0 && !suspend && !isComputerSleeping && !isComputerSuspendedOrLocked && startAfter > 0) {
             //let idleTime = powerMonitor.getSystemIdleTime();
             if (powerMonitor.getSystemIdleState(startAfter * 60) === "idle" && getWakeLock()) {
                 if (!store.get("runOnBattery")) {
@@ -2895,6 +4115,9 @@ async function launchScreensaver() {
                     }
                 }
                 if (store.get("disableWhenFullscreenAppActive") && await isFullscreenAppActive()) {
+                    return;
+                }
+                if (store.get("disableWhenVideoPlaybackActive") && await isVideoPlaybackActive()) {
                     return;
                 }
                 createSSWindow();
@@ -2910,6 +4133,18 @@ setInterval(() => {
         console.log("launchScreensaver error", error);
     });
 }, 5000);
+
+setInterval(() => {
+    const shouldSlowWallpaper = store.get("slowWallpaperWhenFullscreenAppActive") ||
+        store.get("slowAllWallpaperWhenAnyFullscreenAppActive");
+    if (wallpaperWindows.length === 0 || !shouldSlowWallpaper) {
+        updateWallpaperFullscreenSlowdown();
+        return;
+    }
+    getWallpaperCoveredDisplayIds()
+        .then(updateWallpaperFullscreenSlowdown)
+        .catch(() => updateWallpaperFullscreenSlowdown());
+}, 2000);
 
 function onFirstVideoPlayed() {
     let startTime = new Date();
