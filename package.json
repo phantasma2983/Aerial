@@ -43,6 +43,7 @@
             ]
         },
         "nsis": {
+            "artifactName": "Aerial.Setup.${version}.${ext}",
             "installerIcon": "icon.ico",
             "guid": "17c6ea6b-270a-5297-8e23-9bcda4a29a48",
             "perMachine": false
