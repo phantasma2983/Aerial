@@ -15,13 +15,13 @@ function storeSetSync(key, value) {
 contextBridge.exposeInMainWorld("electron", {
     ipcRenderer: {
         send: (channel, data) => {
-            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "openMinimalPreview", "startWallpaper", "stopWallpaper", "nextWallpaperScene", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "wallpaperPlaybackState", "consoleLog", "windowControl", "startAppUpdate", "installAppUpdate"];
+            const validChannels = ["quitApp", "keyPress", "updateCache", "deleteCache", "openCache", "selectCustomLocation", "selectCacheLocation", "refreshCache", "openPreview", "openMinimalPreview", "startWallpaper", "stopWallpaper", "nextWallpaperScene", "refreshConfig", "resetConfig", "updateLocation", "openConfigFolder", "openPlaybackLog", "openLifecycleLog", "selectFile", "openInfoEditor", "newGlobalShortcut", "wallpaperPlaybackState", "wallpaperLifecycle", "consoleLog", "windowControl", "startAppUpdate", "installAppUpdate"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.send(channel, data);
             }
         },
         on: (channel, func) => {
-            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "enterMinimalMode", "enterMinimalModeImmediate", "showWelcome", "updateAttribute", "screenNumber", "wallpaperFullscreenState", "windowStateChanged", "updateStateChanged"];
+            const validChannels = ["displaySettings", "newCustomVideos", "newVideo", "blankTheScreen", "enterMinimalMode", "enterMinimalModeImmediate", "showWelcome", "updateAttribute", "screenNumber", "widgetDisplayId", "wallpaperFullscreenState", "windowStateChanged", "updateStateChanged"];
             if (validChannels.includes(channel)) {
                 ipcRenderer.on(channel, (event, ...args) => func(...args));
             }
@@ -45,4 +45,29 @@ contextBridge.exposeInMainWorld("electron", {
     },
     textUtils,
     fontListUniversal: require('font-list-universal')
+});
+
+contextBridge.exposeInMainWorld("aerial", {
+    widgets: {
+        getConfig: () => ipcRenderer.invoke("widget-config:get"),
+        saveProfile: (mode, profile) => ipcRenderer.invoke("widget-config:save-profile", {mode, profile}),
+        setMirroring: (mode, enabled) => ipcRenderer.invoke("widget-config:set-mirroring", {mode, enabled}),
+        reset: () => ipcRenderer.invoke("widget-config:reset"),
+        getWeather: (force = false) => ipcRenderer.invoke("widget-data:weather", Boolean(force)),
+        selectImage: () => ipcRenderer.invoke("widget-image:select"),
+        getSystemDrives: () => ipcRenderer.invoke("widget-data:drives"),
+        subscribeSystemMetrics: (includeStorage = false) => ipcRenderer.invoke("widget-data:subscribe-system", {includeStorage}),
+        unsubscribeSystemMetrics: () => ipcRenderer.invoke("widget-data:unsubscribe-system"),
+        openPreview: (mode, displayId) => ipcRenderer.invoke("widget-preview:open", {mode, displayId}),
+        onConfigChanged: (callback) => {
+            const listener = (_event, snapshot) => callback(snapshot);
+            ipcRenderer.on("widgetConfigChanged", listener);
+            return () => ipcRenderer.removeListener("widgetConfigChanged", listener);
+        },
+        onDataChanged: (callback) => {
+            const listener = (_event, payload) => callback(payload);
+            ipcRenderer.on("widgetDataChanged", listener);
+            return () => ipcRenderer.removeListener("widgetDataChanged", listener);
+        }
+    }
 });

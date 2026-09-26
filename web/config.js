@@ -2890,6 +2890,15 @@ function openMinimalPreview() {
     electron.ipcRenderer.send('openMinimalPreview');
 }
 
+function openMinimalWidgetSettings() {
+    const widgetsTabButton = document.getElementById('widgetsTabButton');
+    if (!widgetsTabButton) {
+        return;
+    }
+    changeTab({currentTarget: widgetsTabButton}, 'textTab');
+    window.dispatchEvent(new CustomEvent('aerial-widget-mode-request', {detail: 'minimal'}));
+}
+
 function startWallpaper() {
     electron.ipcRenderer.send('startWallpaper');
 }

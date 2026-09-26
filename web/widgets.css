@@ -1,0 +1,388 @@
+#widgetHostRoot {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+}
+
+.widgetHostGrid {
+    position: fixed;
+    display: grid;
+    transition: transform 900ms ease;
+}
+
+.widgetHostItem,
+.aerialWidget {
+    min-width: 0;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+}
+
+.widgetHostItem {
+    container-type: size;
+}
+
+.aerialWidget {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    line-height: 1.15;
+    text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+}
+
+.aerialWidget.is-auto-size {
+    font-size: min(44cqh, 9cqw);
+}
+
+.aerialWidget-clock.is-auto-size {
+    font-size: min(64cqh, 22cqw);
+}
+
+.aerialWidget-text.is-auto-size,
+.aerialWidget-custom-html.is-auto-size {
+    font-size: min(48cqh, 10cqw);
+}
+
+.aerialWidget-weather.is-auto-size {
+    font-size: min(34cqh, 9cqw);
+}
+
+.aerialWidget-astronomy.is-auto-size,
+.aerialWidget-video-info.is-auto-size {
+    font-size: min(46cqh, 8cqw);
+}
+
+.aerialWidget-system.is-auto-size {
+    font-size: min(26cqh, 6cqw);
+}
+
+.aerialWidget-image.is-auto-size {
+    font-size: min(30cqh, 7cqw);
+}
+
+.aerialWidget > * {
+    max-width: 100%;
+}
+
+.widgetFitContent {
+    display: inline-block;
+    width: max-content;
+    max-width: none !important;
+    white-space: nowrap;
+}
+
+.widgetClock {
+    white-space: nowrap;
+}
+
+.widgetUnavailable {
+    opacity: 0.72;
+    font-size: 0.82em;
+}
+
+.weatherWidget {
+    display: flex;
+    align-items: center;
+    gap: 0.7em;
+    width: 100%;
+    height: 100%;
+}
+
+.weatherWidget > img {
+    width: 2.2em;
+    height: 2.2em;
+    flex: 0 0 auto;
+    filter: brightness(0) invert(1);
+}
+
+.weatherCurrentSummary > strong,
+.weatherCurrentSummary > span {
+    display: block;
+}
+
+.weatherCondition {
+    margin-top: 0.2em;
+    font-size: 0.58em;
+    opacity: 0.78;
+}
+
+.weatherCurrentRange {
+    display: flex;
+    gap: 0.65em;
+    margin-top: 0.35em;
+    white-space: nowrap;
+    font-size: 0.48em;
+    opacity: 0.86;
+}
+
+.weatherForecast {
+    display: grid;
+    align-items: stretch;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+    gap: min(1.2cqw, 12px);
+}
+
+.weatherForecast-3 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.weatherForecast-1 {
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.weatherForecast-2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.weatherForecast-4,
+.weatherForecast-5,
+.weatherForecast-6,
+.weatherForecast-7 {
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.weatherForecastDay {
+    box-sizing: border-box;
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    padding: clamp(2px, 7cqh, 10px) min(0.6cqw, 7px);
+    border-radius: min(2.4cqh, 12px);
+    background: rgba(255, 255, 255, 0.07);
+}
+
+.weatherForecastDayContent {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    justify-items: center;
+    align-items: center;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+}
+
+.weatherForecastDayContent > strong {
+    overflow: hidden;
+    max-width: 100%;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.74em;
+    font-weight: 600;
+    opacity: 0.9;
+}
+
+.weatherForecastDayContent > img {
+    min-height: 0;
+    width: 2.6em;
+    height: 100%;
+    max-width: 100%;
+    max-height: 2.6em;
+    margin: 0;
+    object-fit: contain;
+    filter: brightness(0) invert(1);
+}
+
+.weatherForecastRange {
+    display: flex;
+    justify-content: center;
+    gap: 0.38em;
+    white-space: nowrap;
+}
+
+.weatherHigh {
+    font-weight: 650;
+}
+
+.weatherLow {
+    opacity: 0.62;
+}
+
+.systemWidget {
+    display: flex;
+    flex-flow: row wrap;
+    align-content: center;
+    gap: 0.45em 0.6em;
+    width: 100%;
+    height: 100%;
+}
+
+.systemPerformanceMetric {
+    flex: 1 1 5em;
+    min-width: min(100%, 5em);
+    min-height: 2.5em;
+}
+
+.systemRowBreak {
+    flex-basis: 100%;
+    height: 0;
+}
+
+.systemStorageMetrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--drive-card-width)), 1fr));
+    gap: 0.3em;
+    min-height: 0;
+    flex: 1 1 100%;
+    width: 100%;
+    align-content: center;
+    --drive-card-width: 2.5em;
+    --drive-chart-width: 2.3em;
+}
+
+.systemStorageMetrics-regular {
+    --drive-card-width: 3.3em;
+    --drive-chart-width: 3.2em;
+}
+
+.systemStorageMetrics-large {
+    --drive-card-width: 4.2em;
+    --drive-chart-width: 4em;
+}
+
+.systemDrive {
+    font-size: 0.62em;
+}
+
+.systemMetric {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.systemMetricHeader {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5em;
+    font-size: 0.72em;
+}
+
+.systemMetricHeader span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.systemDrivePie {
+    width: min(100%, var(--drive-chart-width));
+    aspect-ratio: 1;
+    border-radius: 50%;
+    margin: 0.2em auto;
+}
+
+.systemDriveCaption {
+    display: grid;
+    grid-template-rows: 1.2em 1.2em;
+    gap: 0.1em;
+    width: 100%;
+    font-size: 0.44em;
+    line-height: 1.2;
+}
+
+.systemDrive.is-pie .systemDriveCaption {
+    text-align: center;
+}
+
+.systemDriveIdentity {
+    display: flex;
+    align-items: baseline;
+    gap: 0.35em;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.systemDrive.is-pie .systemDriveIdentity {
+    justify-content: center;
+}
+
+.systemDriveName {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.systemDrivePercent {
+    flex: 0 0 auto;
+    font-weight: 700;
+}
+
+.systemDriveCapacity {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    opacity: 0.72;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@container (max-aspect-ratio: 1/1) {
+    .systemPerformanceMetric {
+        flex-basis: 100%;
+    }
+}
+
+.systemDriveBar {
+    width: 100%;
+    height: 0.45em;
+    margin: 0.4em 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.16);
+    overflow: hidden;
+}
+
+.systemDriveBar span {
+    display: block;
+    height: 100%;
+    border-radius: inherit;
+    background: currentColor;
+}
+
+.widgetSparkline {
+    width: 100%;
+    height: 42%;
+    margin-top: 0.2em;
+    overflow: visible;
+}
+
+.widgetSparkline polyline {
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    vector-effect: non-scaling-stroke;
+}
+
+.widgetSparkline-area polygon {
+    fill: currentColor;
+    opacity: 0.24;
+}
+
+.widgetSparkline-bars rect {
+    fill: currentColor;
+    opacity: 0.78;
+}
+
+.systemMetric small {
+    font-size: 0.44em;
+    opacity: 0.72;
+}
+
+.imageWidget {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .widgetHostGrid {
+        transition: none;
+    }
+}

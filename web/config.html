@@ -13,7 +13,10 @@
     <script>if (window.module) module = window.module;</script>
     <link rel="stylesheet" href="libraries/css/w3.min.css">
     <link rel="stylesheet" href="libraries/css/all.min.css">
+    <link rel="stylesheet" href="../node_modules/gridstack/dist/gridstack.min.css">
     <link rel="stylesheet" href="config.css">
+    <link rel="stylesheet" href="widgets.css">
+    <link rel="stylesheet" href="widgets-config.css">
 </head>
 <body>
 <div class="w3-top appTopBar">
@@ -40,11 +43,11 @@
         <div class="appTabGroup appTabGroupPrimary">
             <button class="w3-bar-item w3-button tablink navTab w3-blue" onclick="changeTab(event,'settingsTab')">Settings</button>
             <button class="w3-bar-item w3-button tablink navTab" onclick="changeTab(event,'videoTab')">Videos</button>
-            <button class="w3-bar-item w3-button tablink navTab" onclick="changeTab(event,'textTab')">Text</button>
+            <button id="widgetsTabButton" class="w3-bar-item w3-button tablink navTab" onclick="changeTab(event,'textTab')">Widgets</button>
         </div>
         <div class="appTabGroup appTabGroupActions">
-            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openPreview()">Preview Aerial</button>
-            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openMinimalPreview()">Preview Minimal Mode</button>
+            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openPreview()">Preview Screensaver</button>
+            <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openMinimalPreview()">Preview Minimal</button>
             <button class="w3-bar-item w3-button tablink toolbarAction" onclick="startWallpaper()">Start Wallpaper</button>
             <button class="w3-bar-item w3-button tablink toolbarAction" onclick="stopWallpaper()">Stop Wallpaper</button>
         </div>
@@ -101,6 +104,19 @@
                                 <input class="w3-input textOptionInputSmall" type="number"
                                        id="minimalModeAfter" onchange="updateSetting('minimalModeAfter','number')">
                                 <span>minutes</span>
+                            </div>
+                        </div>
+                        <div class="formRow minimalModeWidgetGuide">
+                            <label class="formLabel">Minimal mode content</label>
+                            <div class="formControl minimalModeWidgetGuideContent">
+                                <div class="minimalModeWidgetGuideCopy">
+                                    <strong>Configured with widgets</strong>
+                                    <span>Time format, font, appearance, layout, and per-display content are available under Widgets → Minimal.</span>
+                                </div>
+                                <div class="minimalModeWidgetGuideActions">
+                                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" type="button" onclick="openMinimalWidgetSettings()"><i class="fa fa-th-large"></i> Configure Minimal Widgets</button>
+                                    <button class="w3-button w3-white w3-border w3-border-blue w3-round-large" type="button" onclick="openMinimalPreview()"><i class="fa fa-eye"></i> Preview Minimal</button>
+                                </div>
                             </div>
                         </div>
                         <div id="minimalModeSettingsGroup" class="generalSettingsGroup">
@@ -829,6 +845,7 @@
         </div>
     </div>
     <div id="textTab" class="tab" style="display: none">
+        <div id="widgetConfigRoot"></div>
         <div class="modeSwitchBar">
             <button class="w3-button w3-blue w3-border" data-config-mode="screensaver" onclick="setConfigMode('screensaver')">Screensaver</button>
             <button class="w3-button w3-white w3-border" data-config-mode="wallpaper" onclick="setConfigMode('wallpaper')">Wallpaper</button>
@@ -1384,5 +1401,6 @@
 </div>
 
 <script src="config.js"></script>
+<script type="module" src="generated/widgetConfig.js"></script>
 </body>
 </html>

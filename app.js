@@ -22,6 +22,21 @@ const fs = require('fs');
 const path = require("path");
 const AutoLaunch = require('auto-launch');
 const {getVideoSource, sanitizeExtraVideo} = require('./shared/video-utils');
+const {
+    WidgetConfigSchema,
+    OwnedWidgetProfileSchema,
+    detachWidgetProfile,
+    materializeWidgetDisplays,
+    mirrorScreensaverProfile,
+    resolveWidgetProfile
+} = require('./runtime/shared/widget-schema');
+const {migrateLegacyWidgetConfig} = require('./runtime/shared/widget-migration');
+const {
+    buildWeatherUrl,
+    getWeatherUnavailableSnapshot,
+    normalizeWeatherSnapshot
+} = require('./runtime/shared/weather');
+const {SystemMetricsSampler} = require('./runtime/main/system-metrics');
 const APP_ICON_PATH = path.join(__dirname, 'icon.ico');
 const APP_USER_MODEL_ID = "com.phantasma2983.aerial";
 const MEDIA_HELPER_RESOURCE_PATH = path.join("media-helper", "aerial-media-helper.exe");
@@ -62,6 +77,10 @@ const UPSTREAM_REPO_URL = "https://github.com/OrangeJedi/Aerial";
 let store;
 let weatherDataRequest = null;
 let minimalModeCountdownInterval = null;
+const systemMetricsSampler = new SystemMetricsSampler();
+const systemMetricsSubscribers = new Map();
+let systemMetricsInterval = null;
+let systemMetricsSampleInFlight = false;
 
 async function initializeStore() {
     const {default: Store} = await import('electron-store');
@@ -191,34 +210,6 @@ function configureGeolocationPermissionHandlers(targetSession) {
     });
 }
 
-function getWeatherUnavailableSnapshot(message, latitude = null, longitude = null) {
-    return {
-        available: false,
-        stale: false,
-        error: message,
-        fetchedAt: "",
-        latitude,
-        longitude,
-        source: "open-meteo",
-        temperatureC: null,
-        temperatureF: null,
-        windSpeedKmh: null,
-        weatherCode: null,
-        isDay: true
-    };
-}
-
-function buildWeatherUrl(latitude, longitude) {
-    const params = new URLSearchParams({
-        latitude: String(latitude),
-        longitude: String(longitude),
-        current: "temperature_2m,weather_code,is_day,wind_speed_10m",
-        wind_speed_unit: "kmh",
-        timezone: "auto"
-    });
-    return `${WEATHER_API_BASE_URL}?${params.toString()}`;
-}
-
 function fetchJson(url, headers = {}) {
     return new Promise((resolve, reject) => {
         const request = https.get(url, {
@@ -248,34 +239,6 @@ function fetchJson(url, headers = {}) {
     });
 }
 
-function normalizeWeatherSnapshot(payload, latitude, longitude) {
-    const current = payload?.current;
-    if (!current) {
-        throw new Error("Weather response did not include current conditions.");
-    }
-    const temperatureC = Number(current.temperature_2m);
-    const weatherCode = Number(current.weather_code);
-    const isDay = Number(current.is_day) === 1;
-    const windSpeedKmh = Number(current.wind_speed_10m);
-    if (!Number.isFinite(temperatureC) || !Number.isFinite(weatherCode)) {
-        throw new Error("Weather response was missing temperature or weather code.");
-    }
-    return {
-        available: true,
-        stale: false,
-        error: "",
-        fetchedAt: new Date().toISOString(),
-        latitude,
-        longitude,
-        source: "open-meteo",
-        temperatureC: Number(temperatureC.toFixed(1)),
-        temperatureF: Number((((temperatureC * 9) / 5) + 32).toFixed(1)),
-        windSpeedKmh: Number.isFinite(windSpeedKmh) ? Number(windSpeedKmh.toFixed(1)) : null,
-        weatherCode,
-        isDay
-    };
-}
-
 function getStoredWeatherSnapshot() {
     const snapshot = store.get("weatherData");
     if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot)) {
@@ -286,6 +249,9 @@ function getStoredWeatherSnapshot() {
 
 function shouldRefreshWeather(snapshot, latitude, longitude, force = false) {
     if (force || !snapshot || !snapshot.fetchedAt) {
+        return true;
+    }
+    if (!Array.isArray(snapshot.forecast) || snapshot.forecast.length === 0) {
         return true;
     }
     if (Number(snapshot.latitude) !== latitude || Number(snapshot.longitude) !== longitude) {
@@ -321,7 +287,7 @@ async function getWeatherData(force = false) {
     }
     weatherDataRequest = (async () => {
         try {
-            const payload = await fetchJson(buildWeatherUrl(latitude, longitude));
+            const payload = await fetchJson(buildWeatherUrl(WEATHER_API_BASE_URL, latitude, longitude));
             const snapshot = normalizeWeatherSnapshot(payload, latitude, longitude);
             store.set("weatherData", snapshot);
             return snapshot;
@@ -494,6 +460,141 @@ function broadcastRendererEvent(channel, ...args) {
             win.webContents.send(channel, ...args);
         }
     }
+}
+
+function getWidgetDisplays() {
+    const primaryId = screen.getPrimaryDisplay().id;
+    return screen.getAllDisplays().map((display, index) => ({
+        id: display.id,
+        index,
+        label: String(display.label || `Display ${index + 1}`),
+        isPrimary: display.id === primaryId,
+        width: display.bounds.width,
+        height: display.bounds.height,
+        nativeWidth: Math.round(display.bounds.width * display.scaleFactor),
+        nativeHeight: Math.round(display.bounds.height * display.scaleFactor),
+        scaleFactor: display.scaleFactor,
+        bounds: {
+            x: display.bounds.x,
+            y: display.bounds.y,
+            width: display.bounds.width,
+            height: display.bounds.height
+        }
+    }));
+}
+
+function ensureWidgetConfig() {
+    const migrated = migrateLegacyWidgetConfig(store.store ?? {});
+    const config = materializeWidgetDisplays(migrated, getWidgetDisplays());
+    if (JSON.stringify(store.get("widgetConfig")) !== JSON.stringify(config)) {
+        store.set("widgetConfig", config);
+    }
+    return config;
+}
+
+function getWidgetConfigSnapshot() {
+    const config = ensureWidgetConfig();
+    return {
+        config,
+        displays: getWidgetDisplays(),
+        context: {
+            astronomy: store.get("astronomy") ?? {},
+            latitude: store.get("latitude") ?? "",
+            longitude: store.get("longitude") ?? ""
+        }
+    };
+}
+
+function saveOwnedWidgetProfile(mode, profile) {
+    const normalizedMode = String(mode || "");
+    if (!["screensaver", "wallpaper", "minimal"].includes(normalizedMode)) {
+        throw new Error("Unsupported widget mode.");
+    }
+    const ownedProfile = OwnedWidgetProfileSchema.parse(profile);
+    const config = ensureWidgetConfig();
+    const nextConfig = WidgetConfigSchema.parse({
+        ...config,
+        profiles: {...config.profiles, [normalizedMode]: ownedProfile}
+    });
+    store.set("widgetConfig", nextConfig);
+    broadcastRendererEvent("widgetConfigChanged", getWidgetConfigSnapshot());
+    return getWidgetConfigSnapshot();
+}
+
+function setWidgetProfileMirroring(mode, enabled) {
+    const normalizedMode = String(mode || "");
+    if (normalizedMode !== "wallpaper" && normalizedMode !== "minimal") {
+        throw new Error("Only Wallpaper and Minimal can mirror Screensaver widgets.");
+    }
+    const config = ensureWidgetConfig();
+    const nextConfig = enabled
+        ? mirrorScreensaverProfile(config, normalizedMode)
+        : detachWidgetProfile(config, normalizedMode);
+    store.set("widgetConfig", nextConfig);
+    broadcastRendererEvent("widgetConfigChanged", getWidgetConfigSnapshot());
+    return getWidgetConfigSnapshot();
+}
+
+function resetWidgetConfig() {
+    store.delete("widgetConfig");
+    const snapshot = getWidgetConfigSnapshot();
+    broadcastRendererEvent("widgetConfigChanged", snapshot);
+    return snapshot;
+}
+
+async function sampleAndBroadcastSystemMetrics() {
+    if (systemMetricsSampleInFlight || systemMetricsSubscribers.size === 0) {
+        return;
+    }
+    systemMetricsSampleInFlight = true;
+    try {
+        const includeStorage = [...systemMetricsSubscribers.values()].some((subscriber) => subscriber.includeStorage);
+        const snapshot = await systemMetricsSampler.sample(includeStorage);
+        for (const [id, subscriber] of systemMetricsSubscribers) {
+            const target = subscriber.webContents;
+            if (!target || target.isDestroyed()) {
+                systemMetricsSubscribers.delete(id);
+                continue;
+            }
+            try {
+                target.send("widgetDataChanged", {source: "system", snapshot});
+            } catch {
+                systemMetricsSubscribers.delete(id);
+            }
+        }
+    } finally {
+        systemMetricsSampleInFlight = false;
+    }
+}
+
+function refreshSystemMetricsSamplerState() {
+    if (systemMetricsSubscribers.size === 0) {
+        if (systemMetricsInterval) {
+            clearInterval(systemMetricsInterval);
+            systemMetricsInterval = null;
+        }
+        return;
+    }
+    if (!systemMetricsInterval) {
+        sampleAndBroadcastSystemMetrics();
+        systemMetricsInterval = setInterval(sampleAndBroadcastSystemMetrics, 1000);
+    }
+}
+
+function subscribeToSystemMetrics(webContents, includeStorage = false) {
+    systemMetricsSubscribers.set(webContents.id, {webContents, includeStorage});
+    webContents.once("destroyed", () => {
+        systemMetricsSubscribers.delete(webContents.id);
+        refreshSystemMetricsSamplerState();
+    });
+    refreshSystemMetricsSamplerState();
+    return {subscribed: true};
+}
+
+function unsubscribeFromSystemMetrics(webContents) {
+    systemMetricsSubscribers.delete(webContents.id);
+    refreshSystemMetricsSamplerState();
+    return {subscribed: false};
 }
 
 function supportsInAppUpdates() {
@@ -1152,6 +1253,18 @@ function parseLaunchFlags(argv) {
     for (const arg of argv ?? []) {
         const normalized = String(arg || "").trim().toLowerCase();
         if (!normalized) {
+            continue;
+        }
+        if (normalized === "--config") {
+            flags.config = true;
+            continue;
+        }
+        if (normalized === "--test-preview") {
+            flags.testPreview = true;
+            continue;
+        }
+        if (normalized === "--no-quit") {
+            flags.noQuit = true;
             continue;
         }
         const slashArg = normalized.startsWith("-") ? `/${normalized.slice(1)}` : normalized;
@@ -2034,6 +2147,8 @@ function scheduleWallpaperAutoStart(reason = "auto-start", delayMs = WALLPAPER_A
 
 function handleWallpaperDisplayChange(reason) {
     store.set('numDisplays', screen.getAllDisplays().length);
+    ensureWidgetConfig();
+    broadcastRendererEvent("widgetConfigChanged", getWidgetConfigSnapshot());
     const hadWallpaper = wallpaperWindows.some((win) => win && !win.isDestroyed());
     logLifecycle("wallpaper:display-change", {
         reason,
@@ -2075,6 +2190,7 @@ function loadWallpaperWindow(win) {
     win.webContents.once('did-finish-load', () => {
         if (win && !win.isDestroyed()) {
             win.webContents.send('screenNumber', screenIndex);
+            win.webContents.send('widgetDisplayId', Number(win.aerialWallpaperDisplayId));
             win.webContents.send('screensaverVisible');
         }
     });
@@ -2104,8 +2220,14 @@ function getScreensaverAllowedVideos() {
     return store.get("allowedVideos");
 }
 
-function buildScreensaverLoadOptions(startMode, resumeState) {
+function buildScreensaverLoadOptions(startMode, resumeState, rendererMode = "screensaver", widgetMode = rendererMode) {
     const query = {};
+    if (rendererMode === "wallpaper") {
+        query.mode = rendererMode;
+    }
+    if (widgetMode !== rendererMode) {
+        query.widgetMode = widgetMode;
+    }
     if (startMode === "minimal") {
         query.startMode = startMode;
     }
@@ -2363,6 +2485,7 @@ function createSSWindow(argv, options = {}) {
             win.loadFile('web/screensaver.html', buildScreensaverLoadOptions(startMode, resumeState));
             win.webContents.once('did-finish-load', () => {
                 win.webContents.send('screenNumber', i);
+                win.webContents.send('widgetDisplayId', displayId);
             });
         }
         win.on('closed', function () {
@@ -2407,15 +2530,28 @@ function createSSWindow(argv, options = {}) {
 
 function createSSPWindow(argv, options = {}) {
     const startMode = options.startMode === "minimal" ? "minimal" : "normal";
+    const rendererMode = options.rendererMode === "wallpaper" ? "wallpaper" : "screensaver";
+    const widgetMode = options.widgetMode === "wallpaper" || options.widgetMode === "minimal"
+        ? options.widgetMode
+        : rendererMode;
     nq = true;
     allowedVideos = getScreensaverAllowedVideos();
     previouslyPlayed = [];
     resetPlaybackHistory();
     const resumeState = getWallpaperPlaybackResumeState();
-    let displays = screen.getAllDisplays();
+    const displays = screen.getAllDisplays();
+    const requestedDisplayId = Number(options.displayId);
+    const previewDisplay = displays.find((display) => display.id === requestedDisplayId) || screen.getPrimaryDisplay();
+    const previewIndex = Math.max(0, displays.findIndex((display) => display.id === previewDisplay.id));
+    const previewMaxWidth = 1280;
+    const previewMaxHeight = 800;
+    const previewScale = Math.min(previewMaxWidth / previewDisplay.bounds.width, previewMaxHeight / previewDisplay.bounds.height, 1);
+    const previewWidth = Math.round(previewDisplay.bounds.width * previewScale);
+    const previewHeight = Math.round(previewDisplay.bounds.height * previewScale);
     let win = new BrowserWindow({
-        width: 1280,
-        height: 720,
+        width: previewWidth,
+        height: previewHeight,
+        useContentSize: true,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -2429,9 +2565,10 @@ function createSSPWindow(argv, options = {}) {
         show: false
     });
     applyWindowsAppDetails(win);
-    win.loadFile('web/screensaver.html', buildScreensaverLoadOptions(startMode, resumeState));
+    win.loadFile('web/screensaver.html', buildScreensaverLoadOptions(startMode, resumeState, rendererMode, widgetMode));
     win.webContents.once('did-finish-load', () => {
-        win.webContents.send('screenNumber', 0);
+        win.webContents.send('screenNumber', previewIndex);
+        win.webContents.send('widgetDisplayId', previewDisplay.id);
     });
     win.on('closed', function () {
         screens.pop(screens.indexOf(win));
@@ -2786,6 +2923,7 @@ function startUp() {
         // Keep runtime metadata and merged catalog current even between releases.
         setUpConfigFile();
     }
+    ensureWidgetConfig();
     applyDefaultVideoProfileOnLaunch();
     calculateAstronomy();
     getWeatherData(false);
@@ -3171,6 +3309,7 @@ function createWallpaperWindows() {
                 contextIsolation: true,
                 enableRemoteModule: false,
                 sandbox: false,
+                backgroundThrottling: false,
                 preload: path.join(__dirname, "preload.js")
             }
         });
@@ -3482,6 +3621,47 @@ ipcMain.handle('getWeatherData', (_event, force = false) => {
     return getWeatherData(Boolean(force));
 });
 
+ipcMain.handle("widget-config:get", () => getWidgetConfigSnapshot());
+
+ipcMain.handle("widget-config:save-profile", (_event, payload = {}) => {
+    return saveOwnedWidgetProfile(payload.mode, payload.profile);
+});
+
+ipcMain.handle("widget-config:set-mirroring", (_event, payload = {}) => {
+    return setWidgetProfileMirroring(payload.mode, Boolean(payload.enabled));
+});
+
+ipcMain.handle("widget-config:reset", () => resetWidgetConfig());
+
+ipcMain.handle("widget-data:weather", (_event, force = false) => getWeatherData(Boolean(force)));
+
+ipcMain.handle("widget-image:select", async (event) => {
+    const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
+    const result = await dialog.showOpenDialog(ownerWindow, {
+        title: "Choose widget image",
+        properties: ["openFile"],
+        filters: [{name: "Images", extensions: ["jpg", "jpeg", "png", "gif", "webp", "bmp"]}]
+    });
+    return {canceled: result.canceled || !result.filePaths[0], path: result.filePaths[0] || ""};
+});
+
+ipcMain.handle("widget-data:drives", () => systemMetricsSampler.getDrives());
+
+ipcMain.handle("widget-data:subscribe-system", (event, payload = {}) => subscribeToSystemMetrics(event.sender, payload.includeStorage === true));
+
+ipcMain.handle("widget-data:unsubscribe-system", (event) => unsubscribeFromSystemMetrics(event.sender));
+
+ipcMain.handle("widget-preview:open", (_event, payload = {}) => {
+    const requestedMode = typeof payload === "string" ? payload : payload.mode;
+    const normalizedMode = requestedMode === "wallpaper" ? "wallpaper" : requestedMode === "minimal" ? "minimal" : "screensaver";
+    createSSPWindow(process.argv, {
+        startMode: normalizedMode === "minimal" ? "minimal" : "normal",
+        widgetMode: normalizedMode,
+        displayId: typeof payload === "object" ? payload.displayId : undefined
+    });
+    return {opened: true, mode: normalizedMode};
+});
+
 ipcMain.on('selectCustomLocation', async (event, arg) => {
     const ownerWindow = BrowserWindow.fromWebContents(event.sender) || undefined;
     const result = await dialog.showOpenDialog(ownerWindow, {
@@ -3695,6 +3875,38 @@ ipcMain.on('wallpaperPlaybackState', (event, state) => {
         screenNumber: Number(state.screenNumber ?? 0),
         updatedAt: Date.now()
     };
+});
+
+const WALLPAPER_RENDERER_LIFECYCLE_EVENTS = new Set([
+    "fullscreen-enter",
+    "fullscreen-exit",
+    "resume-failed",
+    "resumed",
+    "playback-stalled"
+]);
+
+ipcMain.on('wallpaperLifecycle', (event, payload) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    if (!wallpaperWindows.some((win) => win === senderWindow)) {
+        return;
+    }
+    const eventName = String(payload?.eventName ?? "");
+    if (!WALLPAPER_RENDERER_LIFECYCLE_EVENTS.has(eventName)) {
+        return;
+    }
+    const details = payload?.details && typeof payload.details === "object"
+        ? payload.details
+        : {};
+    logLifecycle(`wallpaperPlayback:${eventName}`, {
+        screenNumber: Number(details.screenNumber ?? senderWindow.aerialWallpaperScreenNumber ?? 0),
+        videoId: String(details.videoId ?? "").slice(0, 200),
+        reason: String(details.reason ?? "").slice(0, 100),
+        attempt: Math.max(0, Number(details.attempt) || 0),
+        currentTime: Math.max(0, Number(details.currentTime) || 0),
+        readyState: Math.max(0, Number(details.readyState) || 0),
+        networkState: Math.max(0, Number(details.networkState) || 0),
+        error: String(details.error ?? "").slice(0, 500)
+    });
 });
 
 ipcMain.on('consoleLog', (event, msg) => {

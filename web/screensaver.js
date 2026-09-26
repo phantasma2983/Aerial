@@ -2,6 +2,7 @@ const videos = electron.videos;
 const urlSearchParams = new URLSearchParams(window.location.search);
 const rendererMode = urlSearchParams.get("mode") ?? "screensaver";
 const isWallpaperMode = rendererMode === "wallpaper";
+const modernWidgetHostEnabled = Boolean(window.aerialModernWidgetsEnabled);
 const resumePlaybackState = {
     videoId: urlSearchParams.get("resumeVideoId") ?? "",
     currentTime: Math.max(0, Number(urlSearchParams.get("resumeTime")) || 0)
@@ -77,9 +78,22 @@ let wallpaperFullscreenActive = false;
 let wallpaperCurrentPlaybackRate = Number(modeStoreGet('playbackSpeed')) || 1;
 let wallpaperPauseTimeout = null;
 let wallpaperPlaybackSmoothingActive = false;
+let wallpaperPlaybackWatchdogInterval = null;
+let wallpaperResumeInFlight = false;
+let wallpaperResumeAttemptCount = 0;
+let wallpaperResumeRetryAfter = 0;
+let wallpaperProgressVideoId = "";
+let wallpaperProgressTime = 0;
+let wallpaperProgressObservedAt = 0;
 const WALLPAPER_SLOWDOWN_TICK_MS = 100;
 const WALLPAPER_PAUSE_AFTER_MS = 1000;
 const WALLPAPER_PAUSE_RATE_FLOOR = 0.35;
+const WALLPAPER_RESUME_RETRY_MS = 1000;
+const WALLPAPER_RESUME_MAX_ATTEMPTS = 5;
+const WALLPAPER_RESUME_COOLDOWN_MS = 10000;
+const WALLPAPER_PLAYBACK_WATCHDOG_MS = 5000;
+const WALLPAPER_PLAYBACK_STALL_MS = 20000;
+const WALLPAPER_MIN_PROGRESS_SECONDS = 0.25;
 const debugPlayback = modeStoreGet("debugPlayback") ?? false;
 const playbackMetrics = {
     transitionRequests: 0,
@@ -160,6 +174,133 @@ function pauseWallpaperAfterSlowdown() {
             container.pause();
         }
     }, WALLPAPER_PAUSE_AFTER_MS);
+}
+
+function logWallpaperLifecycle(eventName, details = {}) {
+    if (!isWallpaperMode) {
+        return;
+    }
+    electron.ipcRenderer.send('wallpaperLifecycle', {
+        eventName,
+        details: {
+            screenNumber,
+            ...details
+        }
+    });
+}
+
+function resetWallpaperResumeAttempts() {
+    wallpaperResumeAttemptCount = 0;
+    wallpaperResumeRetryAfter = 0;
+}
+
+function resetWallpaperProgress(activeVideo = null) {
+    wallpaperProgressVideoId = activeVideo?.videoId ?? "";
+    wallpaperProgressTime = Number(activeVideo?.currentTime) || 0;
+    wallpaperProgressObservedAt = Date.now();
+}
+
+async function ensureWallpaperPlayback(reason) {
+    if (!isWallpaperMode || wallpaperFullscreenActive || blackScreen || videoChangeState.inProgress || wallpaperResumeInFlight) {
+        return false;
+    }
+    const activeVideo = containers[currentPlayer];
+    if (!activeVideo?.videoId || activeVideo.ended) {
+        return false;
+    }
+    if (!activeVideo.paused) {
+        resetWallpaperResumeAttempts();
+        return true;
+    }
+
+    const now = Date.now();
+    if (now < wallpaperResumeRetryAfter) {
+        return false;
+    }
+
+    wallpaperResumeInFlight = true;
+    wallpaperResumeAttemptCount += 1;
+    const attempt = wallpaperResumeAttemptCount;
+    const videoId = activeVideo.videoId;
+    try {
+        wallpaperCurrentPlaybackRate = getConfiguredPlaybackSpeed();
+        applyPlaybackRate(wallpaperCurrentPlaybackRate);
+        await activeVideo.play();
+        if (wallpaperFullscreenActive) {
+            activeVideo.pause();
+            return false;
+        }
+        if (activeVideo.paused) {
+            throw new Error("Video remained paused after play() resolved.");
+        }
+        resetWallpaperResumeAttempts();
+        resetWallpaperProgress(activeVideo);
+        setWallpaperPlaybackSmoothing(false);
+        scheduleNextVideo(currentPlayer);
+        logWallpaperLifecycle("resumed", {
+            videoId,
+            reason,
+            attempt,
+            currentTime: activeVideo.currentTime,
+            readyState: activeVideo.readyState,
+            networkState: activeVideo.networkState
+        });
+        return true;
+    } catch (error) {
+        const cooldown = attempt >= WALLPAPER_RESUME_MAX_ATTEMPTS;
+        wallpaperResumeRetryAfter = Date.now() + (cooldown ? WALLPAPER_RESUME_COOLDOWN_MS : WALLPAPER_RESUME_RETRY_MS);
+        if (cooldown) {
+            wallpaperResumeAttemptCount = 0;
+        }
+        logWallpaperLifecycle("resume-failed", {
+            videoId,
+            reason,
+            attempt,
+            currentTime: activeVideo.currentTime,
+            readyState: activeVideo.readyState,
+            networkState: activeVideo.networkState,
+            error: error?.message ?? String(error)
+        });
+        return false;
+    } finally {
+        wallpaperResumeInFlight = false;
+    }
+}
+
+function monitorWallpaperPlayback() {
+    if (!isWallpaperMode || wallpaperFullscreenActive || blackScreen || videoChangeState.inProgress) {
+        resetWallpaperProgress();
+        return;
+    }
+    const activeVideo = containers[currentPlayer];
+    if (!activeVideo?.videoId) {
+        resetWallpaperProgress();
+        return;
+    }
+    if (activeVideo.paused) {
+        ensureWallpaperPlayback("watchdog-paused");
+        return;
+    }
+
+    const currentTime = Number(activeVideo.currentTime) || 0;
+    if (wallpaperProgressVideoId !== activeVideo.videoId || currentTime >= wallpaperProgressTime + WALLPAPER_MIN_PROGRESS_SECONDS) {
+        resetWallpaperProgress(activeVideo);
+        return;
+    }
+    if (Date.now() - wallpaperProgressObservedAt < WALLPAPER_PLAYBACK_STALL_MS || activeVideo.seeking) {
+        return;
+    }
+
+    logWallpaperLifecycle("playback-stalled", {
+        videoId: activeVideo.videoId,
+        reason: "watchdog-no-progress",
+        currentTime,
+        readyState: activeVideo.readyState,
+        networkState: activeVideo.networkState
+    });
+    resetWallpaperProgress(activeVideo);
+    activeVideo.pause();
+    ensureWallpaperPlayback("watchdog-stalled");
 }
 
 function getTextTransitionDurationMs(setting, fallbackMs) {
@@ -508,6 +649,10 @@ function playVideo(videoContainer, loadedCallback) {
     }
 
     currentlyPlaying = containers[videoContainer].videoId;
+    const currentVideoInfo = currentlyPlaying[0] === "_"
+        ? customVideos.find((video) => video.id === currentlyPlaying)
+        : videos.find((video) => video.id === currentlyPlaying);
+    window.dispatchEvent(new CustomEvent("aerial-video-context", {detail: currentVideoInfo ?? {}}));
     containers[videoContainer].play().catch((error) => {
         console.warn("Video play was interrupted", error);
     });
@@ -1203,7 +1348,9 @@ $('.displayText')
 $('#textDisplayArea').css('opacity', 0);
 
 //draw text
-let displayText = modeStoreGet('displayText') ?? [];
+let displayText = modernWidgetHostEnabled
+    ? {positionList: [], random: []}
+    : (modeStoreGet('displayText') ?? {positionList: [], random: []});
 let html = "";
 let textOverlayInitialized = false;
 
@@ -1279,13 +1426,7 @@ function updateWallpaperSpeedEase() {
     if (wallpaperCurrentPlaybackRate === 0) {
         wallpaperCurrentPlaybackRate = configuredRate;
         applyPlaybackRate(wallpaperCurrentPlaybackRate);
-        for (const container of containers) {
-            if (container.videoId) {
-                container.play().catch(() => {});
-            }
-        }
-        scheduleNextVideo(currentPlayer);
-        setWallpaperPlaybackSmoothing(false);
+        ensureWallpaperPlayback("slowdown-ended");
         return;
     }
 
@@ -1302,20 +1443,20 @@ function setWallpaperFullscreenActive(isActive) {
     }
     const wasFullscreenActive = wallpaperFullscreenActive;
     wallpaperFullscreenActive = Boolean(isActive);
-    if (!wallpaperFullscreenActive && wallpaperCurrentPlaybackRate === 0) {
+    if (wallpaperFullscreenActive) {
+        resetWallpaperResumeAttempts();
+        resetWallpaperProgress();
+    } else {
+        clearWallpaperPauseTimeout();
         wallpaperCurrentPlaybackRate = getConfiguredPlaybackSpeed();
         applyPlaybackRate(wallpaperCurrentPlaybackRate);
-        for (const container of containers) {
-            if (container.videoId && container.paused) {
-                container.play().catch(() => {});
-            }
-        }
-        setWallpaperPlaybackSmoothing(false);
-    } else if (!wallpaperFullscreenActive) {
-        clearWallpaperPauseTimeout();
+        ensureWallpaperPlayback(wasFullscreenActive ? "fullscreen-exit" : "fullscreen-state-check");
     }
-    if (wasFullscreenActive && !wallpaperFullscreenActive) {
-        scheduleNextVideo(currentPlayer);
+    if (wasFullscreenActive !== wallpaperFullscreenActive) {
+        logWallpaperLifecycle(wallpaperFullscreenActive ? "fullscreen-enter" : "fullscreen-exit", {
+            videoId: containers[currentPlayer]?.videoId ?? "",
+            currentTime: containers[currentPlayer]?.currentTime ?? 0
+        });
     }
     if (!wallpaperSpeedEaseInterval) {
         wallpaperSpeedEaseInterval = setInterval(updateWallpaperSpeedEase, WALLPAPER_SLOWDOWN_TICK_MS);
@@ -1454,6 +1595,13 @@ function updateMinimalModeClock() {
 
 function showMinimalMode() {
     minimalModeActive = true;
+    if (modernWidgetHostEnabled) {
+        window.dispatchEvent(new CustomEvent("aerial-mode-change", {detail: "minimal"}));
+        if (metricsOverlay) {
+            metricsOverlay.style.display = "none";
+        }
+        return;
+    }
     renderMinimalMode(chooseNextMinimalModePosition());
     updateMinimalModeClock();
     minimalModeMoveInterval = setInterval(() => {
@@ -1555,6 +1703,15 @@ function renderText() {
 
 function initializeTextOverlay() {
     if (textOverlayInitialized) {
+        return;
+    }
+    if (modernWidgetHostEnabled) {
+        textOverlayInitialized = true;
+        const overlay = document.getElementById("textDisplayArea");
+        if (overlay) {
+            overlay.style.display = "none";
+            overlay.innerHTML = "";
+        }
         return;
     }
     renderText();
@@ -1845,6 +2002,7 @@ if (startInMinimalMode) {
 if (isWallpaperMode) {
     wallpaperPlaybackStateInterval = setInterval(reportWallpaperPlaybackState, 1000);
     wallpaperSpeedEaseInterval = setInterval(updateWallpaperSpeedEase, WALLPAPER_SLOWDOWN_TICK_MS);
+    wallpaperPlaybackWatchdogInterval = setInterval(monitorWallpaperPlayback, WALLPAPER_PLAYBACK_WATCHDOG_MS);
 }
 
 electron.ipcRenderer.on('newVideo', (_event, direction) => {

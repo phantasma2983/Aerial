@@ -12,6 +12,7 @@
     <script>if (window.module) module = window.module;</script>
     <link rel="stylesheet" href="libraries/css/w3.min.css">
     <link href="screensaver.css" rel="stylesheet" type="text/css">
+    <link href="widgets.css" rel="stylesheet" type="text/css">
 </head>
 <body style="background-color: #000000">
 <video autoplay width="100%" class="fullscreen-bg__video" id="video" style="display: none">
@@ -25,7 +26,10 @@
 </div>
 <div id="textDisplayArea" class="displayText"></div>
 <div id="minimalModeOverlay" class="displayText minimalModeOverlay" aria-hidden="true"></div>
+<div id="widgetHostRoot" aria-live="off"></div>
 
+<script>window.aerialModernWidgetsEnabled = true;</script>
+<script type="module" src="generated/widgetHost.js"></script>
 <script src="screensaver.js"></script>
 </body>
 </html>
