@@ -760,6 +760,18 @@
                         <a id="licenseLink" href="https://github.com/phantasma2983/Aerial/blob/HEAD/LICENSE" target="_blank">MIT
                             License</a>.
                     </p>
+                    <div class="aboutPanelBlock">
+                        <h4>Support Aerial</h4>
+                        <p class="w3-small">Aerial is free. Optional tips help support development and maintenance.
+                            Donations do not change features, access, or updates.</p>
+                        <div class="settingActionRow">
+                            <button type="button" class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                    onclick="electron.ipcRenderer.send('openSupportDestination', 'donate')">Donate</button>
+                            <button type="button" class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                    onclick="electron.ipcRenderer.send('openSupportDestination', 'contact')">Contact Support</button>
+                        </div>
+                        <p class="w3-small">Support email: aerial-support@phantasmaweb.com</p>
+                    </div>
                     <hr>
                     <div class="statsCardGrid aboutStatsGrid">
                         <div class="statsCard">
