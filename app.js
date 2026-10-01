@@ -2745,11 +2745,6 @@ function buildTrayMenu() {
         },
         {type: "separator"},
         {
-            label: "Donate…",
-            click: () => openSupportDestination("donate")
-        },
-        {type: "separator"},
-        {
             label: "Exit Aerial", click: () => {
                 logLifecycle("trayMenu:exit-click");
                 isAppQuitting = true;
