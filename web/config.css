@@ -702,6 +702,25 @@ body[data-theme="light"] .navTab.w3-blue {
     box-shadow: inset 0 -3px 0 var(--accent), inset 0 1px 0 rgba(255, 255, 255, 0.55) !important;
 }
 
+.supportNavAction {
+    min-height: 56px;
+    padding: 0 16px !important;
+    border: 0 !important;
+    border-left: 1px solid var(--line) !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: var(--text-muted) !important;
+    font-size: 0.9rem;
+    box-shadow: none !important;
+}
+
+.supportNavAction:hover {
+    background: rgba(44, 195, 179, 0.08) !important;
+    color: var(--text) !important;
+    transform: none !important;
+    box-shadow: none !important;
+}
+
 .toolbarAction {
     min-height: 40px;
     padding: 0 18px !important;

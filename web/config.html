@@ -41,9 +41,10 @@
     </div>
     <div class="w3-bar appTabBar">
         <div class="appTabGroup appTabGroupPrimary">
-            <button class="w3-bar-item w3-button tablink navTab w3-blue" onclick="changeTab(event,'settingsTab')">Settings</button>
+            <button id="settingsTabButton" class="w3-bar-item w3-button tablink navTab w3-blue" onclick="changeTab(event,'settingsTab')">Settings</button>
             <button class="w3-bar-item w3-button tablink navTab" onclick="changeTab(event,'videoTab')">Videos</button>
             <button id="widgetsTabButton" class="w3-bar-item w3-button tablink navTab" onclick="changeTab(event,'textTab')">Widgets</button>
+            <button class="w3-bar-item w3-button supportNavAction" type="button" onclick="openAboutSupportSettings()">Donate &amp; Support</button>
         </div>
         <div class="appTabGroup appTabGroupActions">
             <button class="w3-bar-item w3-button tablink toolbarAction" onclick="openPreview()">Preview Screensaver</button>
@@ -733,7 +734,7 @@
             </div>
             <div id="aboutSettings" class="settingsCard" style="display: none">
                 <div class="w3-container w3-blue cardHeader">
-                    <h3>About Aerial</h3>
+                    <h3 id="aboutHeading" tabindex="-1">About Aerial</h3>
                 </div>
                 <div class="w3-display-container cardContent settingsCardBody">
                     <h4>Apple TV screen saver for Windows</h4>
@@ -760,6 +761,18 @@
                         <a id="licenseLink" href="https://github.com/phantasma2983/Aerial/blob/HEAD/LICENSE" target="_blank">MIT
                             License</a>.
                     </p>
+                    <div class="aboutPanelBlock">
+                        <h4>Support Aerial</h4>
+                        <p class="w3-small">Aerial is free. Optional tips help support development and maintenance.
+                            Donations do not change features, access, or updates.</p>
+                        <div class="settingActionRow">
+                            <button type="button" class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                    onclick="electron.ipcRenderer.send('openSupportDestination', 'donate')">Donate</button>
+                            <button type="button" class="w3-button w3-white w3-border w3-border-blue w3-round-large"
+                                    onclick="electron.ipcRenderer.send('openSupportDestination', 'contact')">Contact Support</button>
+                        </div>
+                        <p class="w3-small">Support email: aerial-support@phantasmaweb.com</p>
+                    </div>
                     <hr>
                     <div class="statsCardGrid aboutStatsGrid">
                         <div class="statsCard">

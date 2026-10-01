@@ -2899,6 +2899,13 @@ function openMinimalWidgetSettings() {
     window.dispatchEvent(new CustomEvent('aerial-widget-mode-request', {detail: 'minimal'}));
 }
 
+function openAboutSupportSettings() {
+    const settingsTabButton = document.getElementById('settingsTabButton');
+    changeTab({currentTarget: settingsTabButton}, 'settingsTab');
+    selectSetting('about');
+    document.getElementById('aboutHeading').focus();
+}
+
 function startWallpaper() {
     electron.ipcRenderer.send('startWallpaper');
 }

@@ -39,6 +39,8 @@ const {
 const {SystemMetricsSampler} = require('./runtime/main/system-metrics');
 const APP_ICON_PATH = path.join(__dirname, 'icon.ico');
 const APP_USER_MODEL_ID = "com.phantasma2983.aerial";
+const DONATION_URL = "https://ko-fi.com/phantasmaweb";
+const SUPPORT_EMAIL_URL = "mailto:aerial-support@phantasmaweb.com";
 const MEDIA_HELPER_RESOURCE_PATH = path.join("media-helper", "aerial-media-helper.exe");
 const WALLPAPER_SCOPED_SETTINGS_VERSION = 3;
 const WALLPAPER_AUTOSTART_DELAY_MS = 1500;
@@ -2752,6 +2754,17 @@ function buildTrayMenu() {
     ]);
 }
 
+function openSupportDestination(destination) {
+    const url = destination === "donate"
+        ? DONATION_URL
+        : destination === "contact" ? SUPPORT_EMAIL_URL : null;
+    if (url) {
+        shell.openExternal(url).catch((error) => {
+            console.error("Could not open Aerial support destination", error);
+        });
+    }
+}
+
 //start up code
 app.allowRendererProcessReuse = true
 app.on('before-quit', () => {
@@ -3418,6 +3431,10 @@ function installDownloadedAppUpdate() {
 }
 
 //events from browser windows
+ipcMain.on('openSupportDestination', (_event, destination) => {
+    openSupportDestination(destination);
+});
+
 ipcMain.on('quitApp', (event, arg) => {
     quitApp();
 });
